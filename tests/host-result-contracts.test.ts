@@ -1651,10 +1651,10 @@ it("selects the string digest encodings implemented by Buffer", () => {
 		new URL("../runtime/src/runtime/node_buffer.c", import.meta.url),
 		"utf8",
 	);
-	const native = source.match(/static bool mal_buffer_encoding_named\([\s\S]*?\n\}/)?.[0];
+	const native = source.match(/bool mal_node_buffer_resolve_encoding\([\s\S]*?\n\}/)?.[0];
 	expect(native).toBeDefined();
 	const encodings = [
-		...native!.matchAll(/mal_buffer_ascii_equal_ci\(string, "([^"]+)"\)/g),
+		...native!.matchAll(/mal_buffer_match_encoding\(string, latin1, "([^"]+)"/g),
 	];
 	expect(BUFFER_STRING_ENCODINGS).toEqual(new Set(encodings.map((match) => match[1])));
 });
