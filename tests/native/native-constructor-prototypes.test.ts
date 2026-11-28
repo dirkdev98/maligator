@@ -14,11 +14,11 @@ const expected = ["native-constructor-prototypes PASS"];
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-constructor-prototypes-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
-function fixedPrototypeHits(stderr: string): number {
+function prototypeHits(stderr: string): number {
 	const line = stderr
 		.split("\n")
 		.find((candidate) => candidate.startsWith("[perf-construct-stats]"));
-	return Number(line?.match(/(?:^|\s)fixed_prototype_hits=([0-9]+)/)?.[1] ?? -1);
+	return Number(line?.match(/(?:^|\s)prototype_hits=([0-9]+)/)?.[1] ?? -1);
 }
 
 describe("native constructor prototype reuse", () => {
@@ -34,14 +34,14 @@ describe("native constructor prototype reuse", () => {
 		}));
 	}, 600_000);
 
-	it("reuses a class constructor's immutable prototype", () => {
+	it("reads a constructor's prototype through its recorded location", () => {
 		const result = spawnSync(compiled, [], {
 			env: { ...process.env, MAL_PERF_STATS: "1" },
 			encoding: "utf-8",
 		});
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 		assertExactLines(result.stdout, expected);
-		expect(fixedPrototypeHits(result.stderr)).toBeGreaterThan(0);
+		expect(prototypeHits(result.stderr)).toBeGreaterThan(0);
 	});
 
 	it("rereads a prototype across sweeps and writable prototypes under collection stress", () => {

@@ -286,7 +286,7 @@ typedef struct MalPerfStats {
     u64 for_in_own_key_snapshots;
     u64 for_in_shape_key_reuses;
     // Constructions that reused a constructor's immutable `prototype`.
-    u64 fixed_constructor_prototype_hits;
+    u64 constructor_prototype_hits;
     u64 object_values_snapshot_admissions;
     u64 object_values_snapshot_observed;
     u64 object_entries_snapshot_observed;

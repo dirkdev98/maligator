@@ -2652,25 +2652,80 @@ bool mal_vm_get_prototype_from_constructor(
 );
 
 /**
- * The hit path of mal_vm_get_prototype_from_constructor's fixed-prototype cache,
- * inline for construct sites. Entries only hold constructors, so an identity match
- * needs no type check; a miss leaves the full lookup to the caller.
+ * The current value of a function's own data `prototype` when its shape is one the
+ * heap's constructor prototype entries recorded. A miss leaves the lookup to
+ * mal_vm_constructor_prototype_data or the full [[Get]].
  */
-static inline __attribute__((always_inline)) bool mal_vm_try_fixed_constructor_prototype(
-    const MalVm *vm, MalValue constructor, MalObject **prototype_out
+static inline __attribute__((always_inline)) bool mal_vm_try_constructor_prototype_shape(
+    const MalVm *vm, const MalObject *constructor, MalValue *out
 ) {
-    if (!mal_value_is_heap(constructor)) return false;
-    const void *identity = mal_value_to_heap(constructor);
     const MalHeap *heap = &vm->heap;
-    for (usize i = 0; i < countof(heap->fixed_constructor_prototypes); i++) {
-        if (heap->fixed_constructor_prototypes[i].constructor == identity &&
-            heap->fixed_constructor_prototypes[i].heap_epoch == heap->epoch) {
-            MAL_PERF_COUNT(fixed_constructor_prototype_hits);
-            *prototype_out = heap->fixed_constructor_prototypes[i].prototype;
+    const MalShape *shape = constructor->shape;
+    for (usize i = 0; i < countof(heap->constructor_prototype_shapes); i++) {
+        if (heap->constructor_prototype_shapes[i].shape == shape) {
+            MAL_PERF_COUNT(constructor_prototype_hits);
+            *out = mal_object_field_load_shaped(
+                constructor, heap->constructor_prototype_shapes[i].slot);
             return true;
         }
     }
     return false;
+}
+
+/**
+ * OrdinaryGetOwnProperty(constructor, "prototype") of a script or native function
+ * when it is a data property, recording where it lives for later reads. False
+ * means the property is absent or an accessor and needs the full [[Get]], which
+ * also creates a script function's lazy `prototype`. Never allocates or throws.
+ */
+bool mal_vm_constructor_prototype_data(MalVm *vm, const MalObject *constructor, MalValue *out);
+
+/**
+ * Whether `callable` lacks an own @@hasInstance, answering as
+ * OrdinaryGetOwnProperty would. Never allocates or throws.
+ */
+bool mal_vm_lacks_own_has_instance_slow(MalVm *vm, const MalObject *callable);
+
+static inline __attribute__((always_inline)) bool mal_vm_lacks_own_has_instance(
+    MalVm *vm, const MalObject *callable
+) {
+    const MalTable *table = mal_object_overflow(callable);
+    if (table == nullptr || callable->overflow_private_only) return true;
+    const MalHeap *heap = &vm->heap;
+    for (usize i = 0; i < countof(heap->has_instance_free_tables); i++) {
+        if (heap->has_instance_free_tables[i].table == table &&
+            heap->has_instance_free_tables[i].entry_count == table->entry_count &&
+            heap->has_instance_free_tables[i].handle_epoch == table->handle_epoch &&
+            heap->has_instance_free_tables[i].heap_epoch == heap->epoch) {
+            return true;
+        }
+    }
+    return mal_vm_lacks_own_has_instance_slow(vm, callable);
+}
+
+/**
+ * The own data `prototype` of a script or native function without an own
+ * @@hasInstance, which InstanceofOperator's default path reads. False when either
+ * needs the full operator. Never allocates or throws.
+ */
+bool mal_vm_default_instanceof_prototype(MalVm *vm, const MalObject *callable, MalValue *out);
+
+/**
+ * GetPrototypeFromConstructor's answer for a script function from the constructor
+ * prototype entries, inline for construct sites. A non-object `prototype` takes the
+ * full path, which falls back to the realm's intrinsic.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_try_constructor_prototype_object(
+    const MalVm *vm, MalValue constructor, MalObject **prototype_out
+) {
+    if (!mal_value_is_function_object(constructor)) return false;
+    MalValue prototype;
+    if (!mal_vm_try_constructor_prototype_shape(vm, mal_value_to_object(constructor), &prototype) ||
+        !mal_value_is_object(prototype)) {
+        return false;
+    }
+    *prototype_out = mal_value_to_object(prototype);
+    return true;
 }
 
 /**

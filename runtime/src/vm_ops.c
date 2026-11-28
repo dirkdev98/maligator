@@ -6693,7 +6693,7 @@ bool mal_vm_instanceof(MalVm *vm, MalValue value, MalValue target) {
         // [[Prototype]], null included, takes the full GetMethod.
         bool inherits_default = (target & MAL_VALUE_CLASS_MASK) == MAL_VALUE_CALLABLE &&
             mal_object_prototype(mal_value_to_object(target)) == function_prototype &&
-            !mal_object_get_own(mal_value_to_object(target), has_instance_key).present;
+            mal_vm_lacks_own_has_instance(vm, mal_value_to_object(target));
         if (!inherits_default) {
             MalValue method;
             if (!mal_vm_get_property(vm, target, has_instance_key, &method)) {
@@ -6736,23 +6736,28 @@ bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
         return false;
     }
 
-    MalKey key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE);
+    // An own data `prototype` is what both the synthetic resolution and [[Get]] read.
     MalValue prototype_value = mal_value_new_undefined();
-    MalValue synthetic;
-    if (mal_vm_resolve_synthetic_property(vm, target, key, &synthetic)) {
-        prototype_value = synthetic;
-    } else if (mal_value_is_object(target)) {
-        // Spec OrdinaryHasInstance step 4: P = Get(C, "prototype"), a full [[Get]]
-        // that INVOKES a getter-defined `.prototype` and (step 5, ReturnIfAbrupt)
-        // propagates a throw. Reading the descriptor's value directly skipped the
-        // getter (returning undefined → a spurious TypeError) and swallowed throws.
-        MalPropertyLookup own = mal_value_is_proxy_object(target)
-            ? (MalPropertyLookup) {.present = false}
-            : mal_object_get_own(mal_value_to_object(target), key);
-        if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
-            prototype_value = own.desc.value;
-        } else if (!mal_vm_get_property(vm, target, key, &prototype_value)) {
-            return false;
+    bool own_data = (mal_value_is_function_object(target) ||
+        mal_value_is_native_function_object(target)) &&
+        mal_vm_constructor_prototype_data(vm, mal_value_to_object(target), &prototype_value);
+    if (!own_data) {
+        MalKey key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE);
+        MalValue synthetic;
+        if (mal_vm_resolve_synthetic_property(vm, target, key, &synthetic)) {
+            prototype_value = synthetic;
+        } else if (mal_value_is_object(target)) {
+            // Spec OrdinaryHasInstance step 4: P = Get(C, "prototype"), a full [[Get]]
+            // that INVOKES a getter-defined `.prototype` and (step 5, ReturnIfAbrupt)
+            // propagates a throw.
+            MalPropertyLookup own = mal_value_is_proxy_object(target)
+                ? (MalPropertyLookup) {.present = false}
+                : mal_object_get_own(mal_value_to_object(target), key);
+            if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+                prototype_value = own.desc.value;
+            } else if (!mal_vm_get_property(vm, target, key, &prototype_value)) {
+                return false;
+            }
         }
     }
 

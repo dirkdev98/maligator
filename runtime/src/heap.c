@@ -751,11 +751,15 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->native_function_name_key = nullptr;
     memset(heap->function_metadata_shapes, 0, sizeof(heap->function_metadata_shapes));
     memset(heap->for_in_silent_prototypes, 0, sizeof(heap->for_in_silent_prototypes));
-    memset(heap->fixed_constructor_prototypes, 0, sizeof(heap->fixed_constructor_prototypes));
+    memset(heap->constructor_prototype_shapes, 0, sizeof(heap->constructor_prototype_shapes));
+    memset(heap->constructor_prototype_rows, 0, sizeof(heap->constructor_prototype_rows));
+    memset(heap->has_instance_free_tables, 0, sizeof(heap->has_instance_free_tables));
     memset(heap->json_plain_shapes, 0, sizeof(heap->json_plain_shapes));
     memset(heap->json_plain_prototypes, 0, sizeof(heap->json_plain_prototypes));
     heap->json_plain_prototype_next = 0;
-    heap->fixed_constructor_next = 0;
+    heap->constructor_prototype_shape_next = 0;
+    heap->constructor_prototype_row_next = 0;
+    heap->has_instance_free_next = 0;
     heap->for_in_silent_next = 0;
     do {
         heap->identity = atomic_fetch_add(&g_next_heap_identity, 1);

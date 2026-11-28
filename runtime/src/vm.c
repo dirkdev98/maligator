@@ -2259,45 +2259,86 @@ bool mal_vm_get_function_realm(MalVm *vm, MalValue callable, MalRealm **realm_ou
 }
 #endif
 
-bool mal_vm_get_prototype_from_constructor(
+bool mal_vm_constructor_prototype_data(MalVm *vm, const MalObject *constructor, MalValue *out) {
+    MalString *atom = vm->hot_intrinsic_keys[MAL_HOT_KEY_PROTOTYPE];
+    if (atom == nullptr) return false;
+    MalHeap *heap = &vm->heap;
+    const MalShape *shape = constructor->shape;
+    MalTable *table = mal_object_overflow(constructor);
+    if (shape->inline_count != 0) {
+        if (mal_vm_try_constructor_prototype_shape(vm, constructor, out)) return true;
+    } else if (table != nullptr) {
+        for (usize i = 0; i < countof(heap->constructor_prototype_rows); i++) {
+            u8 flags;
+            if (mal_table_named_hint_read(table, heap->constructor_prototype_rows[i],
+                    mal_value_from_string(atom), out, &flags)) {
+                if (flags & MAL_PROPERTY_ACCESSOR) return false;
+                MAL_PERF_COUNT(constructor_prototype_hits);
+                return true;
+            }
+        }
+    }
+    MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(atom)};
+    i32 index = mal_shape_find(shape, key, MAL_SHAPE_FIND_GET_OWN);
+    if (index >= 0) {
+        u32 slot = shape->props[index].slot;
+        usize next = heap->constructor_prototype_shape_next++ %
+            countof(heap->constructor_prototype_shapes);
+        heap->constructor_prototype_shapes[next].shape = shape;
+        heap->constructor_prototype_shapes[next].slot = slot;
+        *out = mal_object_field_load(constructor, slot);
+        return true;
+    }
+    if (table == nullptr || constructor->overflow_private_only) return false;
+    MalPropertyLookup own = mal_property_lookup(table, key);
+    if (!own.present || (own.desc.flags & MAL_PROPERTY_ACCESSOR)) return false;
+    // A shaped function with an overflow tail reads its shape first, so only a
+    // dictionary function's row is worth remembering.
+    if (shape->inline_count == 0) {
+        usize next = heap->constructor_prototype_row_next++ %
+            countof(heap->constructor_prototype_rows);
+        heap->constructor_prototype_rows[next] = own.entry;
+    }
+    *out = own.desc.value;
+    return true;
+}
+
+bool mal_vm_lacks_own_has_instance_slow(MalVm *vm, const MalObject *callable) {
+    MalTable *table = mal_object_overflow(callable);
+    if (mal_table_lookup(table, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_HAS_INSTANCE)).present) {
+        return false;
+    }
+    MalHeap *heap = &vm->heap;
+    usize next = heap->has_instance_free_next++ % countof(heap->has_instance_free_tables);
+    heap->has_instance_free_tables[next].table = table;
+    heap->has_instance_free_tables[next].handle_epoch = table->handle_epoch;
+    heap->has_instance_free_tables[next].entry_count = table->entry_count;
+    heap->has_instance_free_tables[next].heap_epoch = heap->epoch;
+    return true;
+}
+
+bool mal_vm_default_instanceof_prototype(MalVm *vm, const MalObject *callable, MalValue *out) {
+    return mal_vm_lacks_own_has_instance(vm, callable) &&
+        mal_vm_constructor_prototype_data(vm, callable, out);
+}
+
+// Dozens of native constructors call this. Inlined into each, it grew the runtime
+// text by 5.7 KB in Express, while construct sites already inline the shape check.
+__attribute__((noinline)) bool mal_vm_get_prototype_from_constructor(
     MalVm *vm,
     MalValue constructor,
     MalIntrinsic intrinsic_default_proto,
     MalObject **prototype_out
 ) {
-    MalHeap *heap = &vm->heap;
-    // A built-in constructor's `prototype` is fixed like a class's, so both use the cache.
-    bool function = mal_value_is_function_object(constructor) ||
-        mal_value_is_native_function_object(constructor);
-    if (function) {
-        const void *identity = mal_value_to_heap(constructor);
-        for (usize i = 0; i < countof(heap->fixed_constructor_prototypes); i++) {
-            if (heap->fixed_constructor_prototypes[i].constructor == identity &&
-                heap->fixed_constructor_prototypes[i].heap_epoch == heap->epoch) {
-                MAL_PERF_COUNT(fixed_constructor_prototype_hits);
-                *prototype_out = heap->fixed_constructor_prototypes[i].prototype;
-                return true;
-            }
-        }
-    }
-    MalKey key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE);
     MalValue prototype;
     // An own data property is what [[Get]] returns; a script function creates its
     // `prototype` lazily and a native one may lack it, so only an absent one needs
     // the generic path.
-    MalPropertyLookup own = function
-        ? mal_object_get_own(mal_value_to_object(constructor), key)
-        : (MalPropertyLookup) {0};
-    if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
-        prototype = own.desc.value;
-        if (mal_value_is_object(prototype) &&
-            !(own.desc.flags & (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE))) {
-            usize slot = heap->fixed_constructor_next++ % countof(heap->fixed_constructor_prototypes);
-            heap->fixed_constructor_prototypes[slot].constructor = mal_value_to_heap(constructor);
-            heap->fixed_constructor_prototypes[slot].prototype = mal_value_to_object(prototype);
-            heap->fixed_constructor_prototypes[slot].heap_epoch = heap->epoch;
-        }
-    } else if (!mal_vm_get_property(vm, constructor, key, &prototype)) {
+    bool own_data = (mal_value_is_function_object(constructor) ||
+        mal_value_is_native_function_object(constructor)) &&
+        mal_vm_constructor_prototype_data(vm, mal_value_to_object(constructor), &prototype);
+    if (!own_data && !mal_vm_get_property(
+            vm, constructor, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE), &prototype)) {
         return false;
     }
     if (mal_value_is_object(prototype)) {
@@ -6105,7 +6146,7 @@ MalCompletion mal_vm_construct_direct_with_target(
         this_value = mal_value_new_empty();
     } else {
         MalObject *prototype;
-        if (!mal_vm_try_fixed_constructor_prototype(vm, new_target, &prototype) &&
+        if (!mal_vm_try_constructor_prototype_object(vm, new_target, &prototype) &&
             !mal_vm_get_prototype_from_constructor(
                 vm, new_target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
 #if MAL_REALMS

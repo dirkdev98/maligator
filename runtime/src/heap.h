@@ -208,15 +208,33 @@ typedef struct MalHeap {
     } for_in_silent_prototypes[4];
     u8 for_in_silent_next;
     /**
-     * Constructors whose `prototype` is a non-writable, non-configurable data property,
-     * which can never change. Entries hold until a sweep could reuse the address.
+     * Where recent constructors keep `prototype` as an own data property: a function
+     * shape with the property's slot, or the row handle of a dictionary function.
+     * `instanceof` and `new` read the current value through them, so reassigning a
+     * writable `prototype` needs no invalidation. Shapes are immutable and live as
+     * long as the heap, and a row handle only answers while its row still holds the
+     * `prototype` key, so no entry references a cell.
      */
     struct {
-        const void *constructor;
-        void *prototype;
+        const MalShape *shape;
+        u32 slot;
+    } constructor_prototype_shapes[4];
+    const void *constructor_prototype_rows[2];
+    u8 constructor_prototype_shape_next;
+    u8 constructor_prototype_row_next;
+    /**
+     * Callable overflow tables found without an own @@hasInstance. Symbol keys only
+     * live in overflow tables, and adding a row appends it, so the verdict holds while
+     * the table's entry count and handle epoch match. A table is freed only by a sweep,
+     * so the heap epoch keeps a reused address from matching.
+     */
+    struct {
+        const struct MalTable *table;
+        u64 handle_epoch;
+        u32 entry_count;
         u32 heap_epoch;
-    } fixed_constructor_prototypes[4];
-    u8 fixed_constructor_next;
+    } has_instance_free_tables[4];
+    u8 has_instance_free_next;
     /** Shapes with no accessor and no own `toJSON`; shapes are immortal and immutable. */
     const MalShape *json_plain_shapes[8];
     /** Prototypes whose chain has no `toJSON`, valid like for_in_silent_prototypes. */

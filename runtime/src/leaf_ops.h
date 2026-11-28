@@ -28,7 +28,7 @@
  * `value`'s chain all decline.
  */
 static inline bool mal_leaf_instanceof(
-    const MalVm *vm, MalValue value, MalValue target, MalValue *out
+    MalVm *vm, MalValue value, MalValue target, MalValue *out
 ) {
     if (!mal_value_is_function_object(target) &&
         !mal_value_is_native_function_object(target)) {
@@ -36,29 +36,18 @@ static inline bool mal_leaf_instanceof(
     }
     const MalObject *callable = mal_value_to_object(target);
     MalObject *parent = mal_object_prototype(callable);
+    MalValue prototype_value;
     if (parent == nullptr ||
         mal_value_from_object(parent) != vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE] ||
-        mal_object_get_own(callable, (MalKey) {
-            .kind = MAL_KEY_SYMBOL,
-            .value = vm->intrinsics[MAL_INTRINSIC_SYMBOL_HAS_INSTANCE],
-        }).present) {
+        !mal_vm_default_instanceof_prototype(vm, callable, &prototype_value)) {
         return false;
     }
     if (!mal_value_is_object(value)) {
         *out = MAL_VALUE_FALSE;
         return true;
     }
-    const MalString *prototype_key = vm->hot_intrinsic_keys[MAL_HOT_KEY_PROTOTYPE];
-    if (prototype_key == nullptr) return false;
-    MalPropertyLookup own = mal_object_get_own(callable, (MalKey) {
-        .kind = MAL_KEY_STRING,
-        .value = mal_value_from_string((MalString *) prototype_key),
-    });
-    if (!own.present || (own.desc.flags & MAL_PROPERTY_ACCESSOR) ||
-        !mal_value_is_object(own.desc.value)) {
-        return false;
-    }
-    const MalObject *prototype = mal_value_to_object(own.desc.value);
+    if (!mal_value_is_object(prototype_value)) return false;
+    const MalObject *prototype = mal_value_to_object(prototype_value);
     MalValue walk = value;
     for (u32 hop = 0; hop < MAL_LEAF_PROTOTYPE_WALK_LIMIT; hop++) {
         if (mal_value_is_proxy_object(walk)) return false;
