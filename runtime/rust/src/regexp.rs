@@ -131,6 +131,28 @@ impl FastClass {
             .is_ok()
     }
 
+    fn complement(&self) -> Self {
+        let mut high = Vec::with_capacity(self.high.len() + 1);
+        let mut next = 256u32;
+        for &(first, last) in self.high.iter() {
+            if u32::from(first) > next {
+                high.push((next as u16, first - 1));
+            }
+            next = u32::from(last) + 1;
+        }
+        if next <= 0xffff {
+            high.push((next as u16, 0xffff));
+        }
+        Self {
+            low: self.low.map(|word| !word),
+            high: high.into(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.low == [0; 4] && self.high.is_empty()
+    }
+
     fn intersects(&self, other: &Self) -> bool {
         if self.low.iter().zip(&other.low).any(|(a, b)| a & b != 0) {
             return true;
@@ -481,8 +503,11 @@ impl FastPattern {
                         }
                         position = end;
                     }
+                    // A fill of variable length calls memset even when it is empty.
                     None if *optional => {
-                        captures[inner.start * 2..inner.end * 2].fill(-1);
+                        if !inner.is_empty() {
+                            captures[inner.start * 2..inner.end * 2].fill(-1);
+                        }
                     }
                     None => return None,
                 },
@@ -830,18 +855,6 @@ fn strip_prefix(nodes: &mut Vec<FastNode>, count: usize) -> usize {
                 }
                 *max == 0
             }
-            FastNode::Group {
-                body,
-                capture: None,
-                optional: false,
-                ..
-            } => {
-                let mut inner = core::mem::take(body).into_vec();
-                stripped += strip_prefix(&mut inner, count - stripped);
-                let consumed = inner.is_empty();
-                *body = inner.into();
-                consumed
-            }
             _ => break,
         };
         if !consumed {
@@ -850,6 +863,67 @@ fn strip_prefix(nodes: &mut Vec<FastNode>, count: usize) -> usize {
         nodes.remove(0);
     }
     stripped
+}
+
+/// Whether the plan executor always matches `nodes` from a position whose next unit,
+/// if there is one, lies in `next` (`None`: any unit). Returns `None` when `nodes` can
+/// fail, and otherwise what the next unit can then be. An unbounded greedy repeat
+/// stops only before a unit outside its class or at the end, which lets a following
+/// alternation such as `(?:;|\s|$)` cover every way the subject can continue.
+fn fast_infallible(nodes: &[FastNode], mut next: Option<FastClass>) -> Option<Option<FastClass>> {
+    for node in nodes {
+        next = match node {
+            FastNode::Repeat {
+                class,
+                min: 0,
+                max,
+                lazy,
+            } => (*max == u32::MAX && !*lazy).then(|| class.complement()),
+            FastNode::Group {
+                body,
+                optional: false,
+                ..
+            } => fast_infallible(body, next)?,
+            FastNode::Group { optional: true, .. } | FastNode::Loop { min: 0, .. } => None,
+            // The executor takes the first alternative that matches: one that cannot
+            // fail, or single-unit alternatives covering every possible next unit
+            // together with a `$` alternative for the end.
+            FastNode::Alternation { alternatives } => {
+                let mut covered = FastClass::empty();
+                let mut ends = false;
+                let mut always = false;
+                for (body, _) in alternatives.iter() {
+                    match body.as_ref() {
+                        [FastNode::Literal(literal)] if literal.len() == 1 => {
+                            covered = covered.union(&FastClass::unit(literal[0]));
+                        }
+                        [FastNode::Repeat { class, min: 1, .. }] => {
+                            covered = covered.union(class);
+                        }
+                        [FastNode::End] => ends = true,
+                        _ => always |= fast_infallible(body, next.clone()).is_some(),
+                    }
+                }
+                let units_covered = next
+                    .as_ref()
+                    .is_some_and(|units| !units.intersects(&covered.complement()));
+                if !always && !(ends && units_covered) {
+                    return None;
+                }
+                None
+            }
+            FastNode::End => match next {
+                Some(units) if units.is_empty() => Some(units),
+                _ => return None,
+            },
+            FastNode::EndOrClass(class) => match next {
+                Some(units) if !units.intersects(&class.complement()) => Some(units),
+                _ => return None,
+            },
+            _ => return None,
+        };
+    }
+    Some(next)
 }
 
 /// Greedy matching equals ECMAScript backtracking when no quantified class shares a unit
@@ -867,11 +941,16 @@ fn strip_prefix(nodes: &mut Vec<FastNode>, count: usize) -> usize {
 /// the lazy repeat stops where the greedy one does. A terminal end-or-class
 /// lookahead contributes its tested class to the continuation: overlap declines
 /// the plan because the assertion could succeed before the run ends.
+///
+/// A greedy repeat may overlap its continuation when that continuation cannot fail
+/// (`fast_infallible`, with `rest_infallible` covering what follows the enclosing
+/// sequence): the backtracking engine then keeps the longest run as well.
 fn fast_nodes_are_greedy_safe(
     nodes: &[FastNode],
     outer: &FastClass,
     outer_end: FastFirstEnd,
     terminal: bool,
+    rest_infallible: bool,
 ) -> bool {
     for (index, node) in nodes.iter().enumerate() {
         let follow = fast_follow(&nodes[index + 1..], outer);
@@ -880,6 +959,8 @@ fn fast_nodes_are_greedy_safe(
             end => end,
         };
         let ends_match = terminal && index + 1 == nodes.len();
+        let body_rest_infallible =
+            rest_infallible && fast_infallible(&nodes[index + 1..], None).is_some();
         match node {
             FastNode::Repeat {
                 class,
@@ -890,7 +971,11 @@ fn fast_nodes_are_greedy_safe(
                 && (class.intersects(&follow)
                     || (*lazy && follow_end == FastFirstEnd::Nullable)) =>
             {
-                return false;
+                let next = (*max == u32::MAX).then(|| class.complement());
+                if *lazy || !rest_infallible || fast_infallible(&nodes[index + 1..], next).is_none()
+                {
+                    return false;
+                }
             }
             FastNode::Group { body, optional, .. } => {
                 if *optional {
@@ -899,7 +984,13 @@ fn fast_nodes_are_greedy_safe(
                         return false;
                     }
                 }
-                if !fast_nodes_are_greedy_safe(body, &follow, follow_end, ends_match) {
+                if !fast_nodes_are_greedy_safe(
+                    body,
+                    &follow,
+                    follow_end,
+                    ends_match,
+                    body_rest_infallible,
+                ) {
                     return false;
                 }
             }
@@ -908,7 +999,13 @@ fn fast_nodes_are_greedy_safe(
                 for (body, _) in alternatives.iter() {
                     let (first, end) = fast_first(body);
                     if (!ends_match && (end == FastFirstEnd::Nullable || first.intersects(&seen)))
-                        || !fast_nodes_are_greedy_safe(body, &follow, follow_end, ends_match)
+                        || !fast_nodes_are_greedy_safe(
+                            body,
+                            &follow,
+                            follow_end,
+                            ends_match,
+                            body_rest_infallible,
+                        )
                     {
                         return false;
                     }
@@ -923,6 +1020,7 @@ fn fast_nodes_are_greedy_safe(
                         body,
                         &first.union(&follow),
                         FastFirstEnd::Nullable,
+                        false,
                         false,
                     )
                 {
@@ -947,6 +1045,11 @@ struct FastParser<'a> {
     /// Under `i` without `u`, Canonicalize never maps a non-ASCII unit to ASCII, so an
     /// ASCII-only pattern matches as if its letters stood for both cases.
     fold_ascii_case: bool,
+    /// Groups open around the current position.
+    depth: usize,
+    /// Whether the pattern itself has alternatives. Non-capturing groups are inlined
+    /// into their sequence, so a plan of one alternation can also come from `(?:a|b)`.
+    top_level_alternation: bool,
 }
 
 fn fast_fold_ascii_ranges(ranges: &mut Vec<(u16, u16)>) {
@@ -1213,7 +1316,9 @@ impl FastParser<'_> {
                     Some(self.next_capture()?)
                 };
                 let inner_start = self.capture_count;
+                self.depth += 1;
                 let body = self.alternation()?;
+                self.depth -= 1;
                 if self.peek() != Some(u16::from(b')')) {
                     return None;
                 }
@@ -1250,6 +1355,9 @@ impl FastParser<'_> {
         }
         if alternatives.len() == 1 {
             return alternatives.pop().map(|(body, _)| body.into_vec());
+        }
+        if self.depth == 0 {
+            self.top_level_alternation = true;
         }
         Some(vec![FastNode::Alternation {
             alternatives: alternatives.into(),
@@ -1301,6 +1409,23 @@ impl FastParser<'_> {
                         max,
                         lazy,
                     }
+                }
+                // A non-capturing group matches as its body does, and inlining it
+                // spares the executor a nested walk.
+                (
+                    FastAtom::Group(FastNode::Group {
+                        body,
+                        capture: None,
+                        optional: false,
+                        ..
+                    }),
+                    None,
+                ) => {
+                    if !literal.is_empty() {
+                        nodes.push(FastNode::Literal(core::mem::take(&mut literal).into()));
+                    }
+                    nodes.extend(body.into_vec());
+                    continue;
                 }
                 (FastAtom::Group(group), None) => group,
                 (
@@ -1396,14 +1521,21 @@ fn compile_fast_pattern(units: &[u16], flags: u32) -> Option<FastPattern> {
         position: usize::from(anchored_start),
         capture_count: 0,
         fold_ascii_case: flags & FLAG_IGNORE_CASE != 0,
+        depth: 0,
+        top_level_alternation: false,
     };
     let mut nodes = parser.alternation()?;
-    // A leading `^` binds only to the first top-level alternative.
-    let top_level_alternation = matches!(nodes.as_slice(), [FastNode::Alternation { .. }]);
     if parser.position != units.len()
         || nodes.is_empty()
-        || (anchored_start && top_level_alternation)
-        || !fast_nodes_are_greedy_safe(&nodes, &FastClass::empty(), FastFirstEnd::Nullable, true)
+        // A leading `^` binds only to the first top-level alternative.
+        || (anchored_start && parser.top_level_alternation)
+        || !fast_nodes_are_greedy_safe(
+            &nodes,
+            &FastClass::empty(),
+            FastFirstEnd::Nullable,
+            true,
+            true,
+        )
     {
         return None;
     }
@@ -1823,14 +1955,14 @@ unsafe fn copy_cached_captures(
     if !out.is_null() && slots > 0 {
         // Slots past the groups are scratch the caller never reads; copying a fixed
         // count avoids a memcpy call.
-        let count = if slots == 2 {
-            2
+        if slots == 2 {
+            unsafe { core::ptr::copy_nonoverlapping(cached.as_ptr(), out, 2) };
         } else if slots <= 16 && cap >= 16 {
-            16
+            let head = unsafe { cached.as_ptr().cast::<[i32; 16]>().read() };
+            unsafe { out.cast::<[i32; 16]>().write_unaligned(head) };
         } else {
-            slots
-        };
-        unsafe { core::ptr::copy_nonoverlapping(cached.as_ptr(), out, count) };
+            unsafe { core::ptr::copy_nonoverlapping(cached.as_ptr(), out, slots) };
+        }
     }
     groups
 }
@@ -3149,6 +3281,26 @@ mod tests {
         assert!(compile_fast_pattern(&utf16(r"a(?=$|b)"), FLAG_UNICODE_SETS).is_none());
     }
 
+    #[test]
+    fn greedy_runs_may_overlap_a_continuation_that_cannot_fail() {
+        assert!(compile_fast_pattern(&utf16(r"^\s*([^;\s]*)(?:;|\s|$)"), 0).is_some());
+        assert!(compile_fast_pattern(&utf16(r"\s*([^,]*)(?:,|$)"), 0).is_some());
+        assert!(compile_fast_pattern(&utf16(r"a*(?:a|$)"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r"\s*([^;\s]*)(?:;|\s)"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r"\s*?([^;\s]*)(?:;|\s|$)"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r"\s*([^;\s]*)(?:;|\s|$)x"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r"\s*([^;\s]{0,3})(?:;|\s|$)"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r"\s*([^,\s]*)(?:,{2}|\s|$)"), 0).is_none());
+    }
+
+    #[test]
+    fn inlined_groups_keep_a_leading_caret_on_every_alternative() {
+        assert!(compile_fast_pattern(&utf16("^(?:a|b)c"), 0).is_some());
+        assert!(compile_fast_pattern(&utf16("^(?:a|b)"), 0).is_some());
+        assert!(compile_fast_pattern(&utf16("^a|b"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("^(?:a)|b"), 0).is_none());
+    }
+
     fn fast_match_ranges<U: SubjectUnit>(
         fast: &FastPattern,
         subject: &[U],
@@ -3381,6 +3533,16 @@ mod tests {
             (r#"^\[x"#, "[x", FLAG_IGNORE_CASE),
             (r#"^\u00e9+x"#, "\u{e9}x", 0),
             (r#"^ab"#, "ab", 0),
+            (
+                r#"^\s*([^;\s]*)(?:;|\s|$)"#,
+                "application/json; charset=utf-8",
+                0,
+            ),
+            (r#"^\s*([^;\s]*)(?:;|\s|$)"#, " \u{3000}text/html ", 0),
+            (r#"\s*([^;\s]*)(?:;|\s|$)"#, "a ;b", 0),
+            (r#"\s*([^,]*)(?:,|$)"#, " x, y", 0),
+            (r#"^(?:a|b)c"#, "bc", 0),
+            (r#"(?:x(?:ab|c))+d"#, "xabxcd", 0),
         ];
         let extras = [
             'a', 'b', 'c', 'x', 'y', 'Z', '0', '9', ' ', '/', ';', '=', ',', '-', '.', '\t',

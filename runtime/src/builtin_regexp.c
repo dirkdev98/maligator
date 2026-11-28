@@ -51,15 +51,44 @@ static bool regexp_throw_string_length(MalVm *vm) {
 // Strings + flags
 // ---------------------------------------------------------------------------
 
+// Out of line so that the Latin-1 path keeps no local array, which Darwin's stack
+// protector would otherwise guard on every call.
+static __attribute__((noinline)) MalString *regexp_inline_utf16_copy(
+    MalVm *vm, const c16 *units, usize length
+) {
+    u8 narrow[MAL_STRING_INLINE_LATIN1_CODE_UNITS];
+    c16 aggregate = 0;
+    for (usize i = 0; i < length; i++) {
+        aggregate |= units[i];
+        narrow[i] = (u8) units[i];
+    }
+    return aggregate <= 0xff
+        ? mal_string_new_inline_latin1(&vm->heap, narrow, length)
+        : mal_string_new_copy(&vm->heap, units, length);
+}
+
+// Pieces up to the inline length copy their units straight from the flat subject, as
+// split's pieces do: such a copy costs no more than a dependent string and retains
+// nothing. Longer pieces keep the slice rules.
 static MalValue regexp_substring(MalVm *vm, MalString *s, i32 start, i32 end) {
-    if (end - start == 1) {
+    usize length = (usize) (end - start);
+    if (length == mal_string_length(s)) {
+        return mal_value_from_string(s);
+    }
+    if (length == 1) {
         return mal_value_from_string(
             mal_intrinsic_code_unit(vm, mal_string_code_unit_at(s, (usize) start))
         );
     }
-    return mal_value_from_string(
-        mal_string_new_slice(&vm->heap, s, (usize) start, (usize) (end - start))
-    );
+    if (length == 0 || length > MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
+        return mal_value_from_string(
+            mal_string_new_slice(&vm->heap, s, (usize) start, length)
+        );
+    }
+    MalStringSegment subject = mal_string_flat_segment(s);
+    return mal_value_from_string(subject.latin1
+        ? mal_string_new_inline_latin1(&vm->heap, subject.latin1_units + start, length)
+        : regexp_inline_utf16_copy(vm, subject.utf16_units + start, length));
 }
 
 typedef enum RegexpLegacyField {
@@ -74,17 +103,19 @@ typedef enum RegexpLegacyField {
 enum { REGEXP_LEGACY_PAREN_COUNT = 9 };
 
 // Matches record positions only; the getters slice SUBJECT on demand, so exec and
-// test() allocate nothing for the statics. SUBJECT is separate because `input` is settable.
+// test() allocate nothing for the statics. Only the `input` setter stores a string in
+// INPUT, which otherwise reads as SUBJECT, so a match replaces at most one reference.
 typedef enum RegexpLegacySlot {
+    /** The string the `input` setter stored, or undefined while `input` reads SUBJECT. */
     REGEXP_LEGACY_SLOT_INPUT,
     REGEXP_LEGACY_SLOT_SUBJECT,
     REGEXP_LEGACY_SLOT_MATCH_START,
     REGEXP_LEGACY_SLOT_MATCH_END,
-    /** The last group of the pattern, which `lastParen` reads however many there are. */
+    /** The match's group count, the whole match included. */
+    REGEXP_LEGACY_SLOT_GROUP_COUNT,
+    /** The last group when the pattern has more than the recorded paren pairs. */
     REGEXP_LEGACY_SLOT_LAST_PAREN_START,
     REGEXP_LEGACY_SLOT_LAST_PAREN_END,
-    /** Recorded paren pairs; later pairs read as non-participating. */
-    REGEXP_LEGACY_SLOT_PAREN_RECORDED,
     REGEXP_LEGACY_SLOT_PAREN_START,
     REGEXP_LEGACY_SLOT_COUNT =
         REGEXP_LEGACY_SLOT_PAREN_START + 2 * REGEXP_LEGACY_PAREN_COUNT,
@@ -120,13 +151,6 @@ static i32 regexp_legacy_load_position(MalVm *vm, RegexpLegacySlot slot) {
     return mal_value_to_i32(regexp_legacy_load(vm, slot));
 }
 
-// Position slots only ever hold Numbers: replacing one shades no reference and
-// publishes no young edge, so neither the SATB barrier nor a card mark applies.
-static void regexp_legacy_store_position(MalArrayObject *state, RegexpLegacySlot slot, i32 position) {
-    assert((u32) slot < state->dense_count && mal_value_is_int32(state->elements[slot]));
-    state->elements[slot] = mal_value_from_i32(position);
-}
-
 static RegexpLegacySlot regexp_legacy_paren_start_slot(i32 group) {
     return (RegexpLegacySlot) (REGEXP_LEGACY_SLOT_PAREN_START + 2 * (group - 1));
 }
@@ -135,49 +159,48 @@ static void regexp_legacy_update(
     MalVm *vm, MalString *subject, const int32_t *captures, int32_t group_count
 ) {
     MalArrayObject *state = regexp_legacy_state(vm);
+    assert(state->dense_count == REGEXP_LEGACY_SLOT_COUNT);
+    MalValue *slots = state->elements;
     MalValue subject_value = mal_value_from_string(subject);
-    // A loop over one subject would otherwise card the old state array on every match.
-    if (state->elements[REGEXP_LEGACY_SLOT_INPUT] != subject_value) {
-        regexp_legacy_replace(state, REGEXP_LEGACY_SLOT_INPUT, subject_value);
+    if (__builtin_expect(slots[REGEXP_LEGACY_SLOT_INPUT] != mal_value_new_undefined(), 0)) {
+        regexp_legacy_replace(state, REGEXP_LEGACY_SLOT_INPUT, mal_value_new_undefined());
     }
-    if (state->elements[REGEXP_LEGACY_SLOT_SUBJECT] != subject_value) {
+    // A loop over one subject would otherwise card the old state array on every match.
+    if (slots[REGEXP_LEGACY_SLOT_SUBJECT] != subject_value) {
         regexp_legacy_replace(state, REGEXP_LEGACY_SLOT_SUBJECT, subject_value);
     }
-    regexp_legacy_store_position(state, REGEXP_LEGACY_SLOT_MATCH_START, captures[0]);
-    regexp_legacy_store_position(state, REGEXP_LEGACY_SLOT_MATCH_END, captures[1]);
+    // Position slots only ever hold Numbers: replacing one shades no reference and
+    // publishes no young edge, so neither the SATB barrier nor a card mark applies.
+    slots[REGEXP_LEGACY_SLOT_MATCH_START] = mal_value_from_i32(captures[0]);
+    slots[REGEXP_LEGACY_SLOT_MATCH_END] = mal_value_from_i32(captures[1]);
+    slots[REGEXP_LEGACY_SLOT_GROUP_COUNT] = mal_value_from_i32(group_count);
     i32 last = group_count - 1;
-    regexp_legacy_store_position(
-        state, REGEXP_LEGACY_SLOT_LAST_PAREN_START, last > 0 ? captures[2 * last] : -1);
-    regexp_legacy_store_position(
-        state, REGEXP_LEGACY_SLOT_LAST_PAREN_END, last > 0 ? captures[2 * last + 1] : -1);
-    i32 recorded = group_count - 1 < REGEXP_LEGACY_PAREN_COUNT
-        ? group_count - 1 : REGEXP_LEGACY_PAREN_COUNT;
-    regexp_legacy_store_position(state, REGEXP_LEGACY_SLOT_PAREN_RECORDED, recorded);
+    i32 recorded = last < REGEXP_LEGACY_PAREN_COUNT ? last : REGEXP_LEGACY_PAREN_COUNT;
     for (i32 group = 1; group <= recorded; group++) {
         RegexpLegacySlot start = regexp_legacy_paren_start_slot(group);
-        regexp_legacy_store_position(state, start, captures[2 * group]);
-        regexp_legacy_store_position(state, (RegexpLegacySlot) (start + 1), captures[2 * group + 1]);
+        slots[start] = mal_value_from_i32(captures[2 * group]);
+        slots[start + 1] = mal_value_from_i32(captures[2 * group + 1]);
+    }
+    if (last > REGEXP_LEGACY_PAREN_COUNT) {
+        slots[REGEXP_LEGACY_SLOT_LAST_PAREN_START] = mal_value_from_i32(captures[2 * last]);
+        slots[REGEXP_LEGACY_SLOT_LAST_PAREN_END] = mal_value_from_i32(captures[2 * last + 1]);
     }
 }
 
-static bool regexp_legacy_paren_participated(MalVm *vm, i32 group) {
-    return group <= regexp_legacy_load_position(vm, REGEXP_LEGACY_SLOT_PAREN_RECORDED) &&
-        regexp_legacy_load_position(vm, regexp_legacy_paren_start_slot(group)) >= 0;
-}
-
-static MalValue regexp_legacy_paren(MalVm *vm, MalString *subject, i32 group) {
-    if (!regexp_legacy_paren_participated(vm, group)) {
-        return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
-    }
-    RegexpLegacySlot start = regexp_legacy_paren_start_slot(group);
+static MalValue regexp_legacy_capture(
+    MalVm *vm, MalString *subject, RegexpLegacySlot start_slot
+) {
+    i32 start = regexp_legacy_load_position(vm, start_slot);
+    if (start < 0) return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
     return regexp_substring(
-        vm, subject, regexp_legacy_load_position(vm, start),
-        regexp_legacy_load_position(vm, (RegexpLegacySlot) (start + 1)));
+        vm, subject, start, regexp_legacy_load_position(vm, (RegexpLegacySlot) (start_slot + 1)));
 }
 
 static MalValue regexp_legacy_read(MalVm *vm, RegexpLegacyField field) {
     if (field == REGEXP_LEGACY_INPUT) {
-        return regexp_legacy_load(vm, REGEXP_LEGACY_SLOT_INPUT);
+        MalValue input = regexp_legacy_load(vm, REGEXP_LEGACY_SLOT_INPUT);
+        return mal_value_is_undefined(input)
+            ? regexp_legacy_load(vm, REGEXP_LEGACY_SLOT_SUBJECT) : input;
     }
     MalString *subject =
         mal_value_to_string(regexp_legacy_load(vm, REGEXP_LEGACY_SLOT_SUBJECT));
@@ -191,15 +214,15 @@ static MalValue regexp_legacy_read(MalVm *vm, RegexpLegacyField field) {
     case REGEXP_LEGACY_RIGHT_CONTEXT:
         return regexp_substring(
             vm, subject, match_end, (i32) mal_string_length(subject));
-    case REGEXP_LEGACY_LAST_PAREN: {
-        i32 start = regexp_legacy_load_position(vm, REGEXP_LEGACY_SLOT_LAST_PAREN_START);
-        if (start < 0) return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
-        return regexp_substring(
-            vm, subject, start, regexp_legacy_load_position(vm, REGEXP_LEGACY_SLOT_LAST_PAREN_END));
-    }
     default:
-        return regexp_legacy_paren(vm, subject, (i32) (field - REGEXP_LEGACY_PAREN_1) + 1);
+        break;
     }
+    i32 last = regexp_legacy_load_position(vm, REGEXP_LEGACY_SLOT_GROUP_COUNT) - 1;
+    i32 group = field == REGEXP_LEGACY_LAST_PAREN ? last : (i32) (field - REGEXP_LEGACY_PAREN_1) + 1;
+    if (group == 0 || group > last) return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+    return regexp_legacy_capture(
+        vm, subject, group > REGEXP_LEGACY_PAREN_COUNT
+            ? REGEXP_LEGACY_SLOT_LAST_PAREN_START : regexp_legacy_paren_start_slot(group));
 }
 
 // Decode UTF-8 (regress group names) into a heap MalString of UTF-16 units.
@@ -3884,9 +3907,10 @@ void mal_builtin_regexp_install(MalVm *vm) {
         mal_intrinsic_new_dense_array(vm, REGEXP_LEGACY_SLOT_COUNT);
     vm->intrinsics[MAL_INTRINSIC_REGEXP_LEGACY_STATE] =
         mal_value_from_array_object(legacy_state);
-    MalValue empty = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
     for (i32 index = 0; index < REGEXP_LEGACY_SLOT_COUNT; index++) {
-        MalValue initial = index < REGEXP_LEGACY_SLOT_MATCH_START ? empty
+        MalValue initial = index == REGEXP_LEGACY_SLOT_INPUT ? mal_value_new_undefined()
+            : index == REGEXP_LEGACY_SLOT_SUBJECT ? mal_value_from_string(mal_intrinsic_ascii(vm, ""))
+            : index == REGEXP_LEGACY_SLOT_GROUP_COUNT ? mal_value_from_i32(1)
             : index < REGEXP_LEGACY_SLOT_PAREN_START ? mal_value_from_i32(0)
             : mal_value_from_i32(-1);
         mal_array_object_store(legacy_state, mal_key_index(index), initial);
