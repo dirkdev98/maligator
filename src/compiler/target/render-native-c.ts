@@ -7510,6 +7510,27 @@ function exactCollectionMethodIntrinsics(
 	return { prototype, method: `${prototype}_${method.toUpperCase()}` };
 }
 
+/**
+ * The brands a chain over a receiver of unproven brand tests before its ordinary load.
+ * An ordinary Map or Set whose prototype and method are unmodified captures the method
+ * the proven chain captures, and its call runs the brand's builtin. A proven receiver
+ * already gets that form, and a WeakMap or WeakSet guess keeps the generic capture.
+ */
+function directCollectionBrands(
+	chain: NativeBuiltinCollectionCallChain,
+	exactReceiver: CompilerExactCollectionBrand | undefined,
+): ReadonlyArray<"Map" | "Set"> {
+	if (
+		exactReceiver !== undefined ||
+		chain.calleeGuard === "elided" ||
+		chain.operation.startsWith("Weak")
+	)
+		return [];
+	return (["Map", "Set"] as const).filter(
+		(brand) => exactCollectionMethodIntrinsics(brand, chain.operation) !== undefined,
+	);
+}
+
 function nativeBuiltinCollectionOperation(
 	operation: NativeBuiltinCollectionCallChain["operation"],
 ): string {
@@ -11958,6 +11979,20 @@ class NativeInstructionEmission {
 				exactReceiver === undefined
 					? undefined
 					: exactCollectionMethodIntrinsics(exactReceiver, chain.operation);
+			const brands = directCollectionBrands(chain, exactReceiver);
+			if (brands.length > 0) {
+				// Anything else, including a collection with own properties, takes the
+				// ordinary load.
+				const captures = brands.map((brand) => {
+					const intrinsics = exactCollectionMethodIntrinsics(brand, chain.operation)!;
+					return `(mal_value_is_${brand.toLowerCase()}_object(${receiver}) && mal_vm_try_capture_exact_collection_method(vm, ${receiver}, ${intrinsics.prototype}, ${intrinsics.method}, &r${instruction.dst}))`;
+				});
+				return [
+					`if (!(${captures.join(" || ")})) {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			return [
 				exact === undefined
 					? `if (!mal_vm_try_capture_collection_method(vm, ${nativeBuiltinCollectionOperation(chain.operation)}, ${receiver}, &r${instruction.dst})) {`
@@ -15715,12 +15750,54 @@ class NativeInstructionEmission {
 				this.callPoll(),
 			];
 		}
+		const collectionChain = this.context.nativeBuiltinCollectionCallChainAction;
+		const directBrands =
+			collectionChain?.role === "call"
+				? directCollectionBrands(collectionChain.chain, callPlan?.exactCollectionReceiver)
+				: [];
+		if (collectionChain !== undefined && directBrands.length > 0) {
+			const { operation } = collectionChain.chain;
+			const method = operation.slice(operation.lastIndexOf(".") + 1);
+			const callee = this.boxedOperand(instruction.callee);
+			const receiver = this.boxedOperand(instruction.thisValue);
+			// The call tests the method and brand again rather than carrying the capture's
+			// outcome in a flag: a flag stays live across argument evaluation, which can
+			// cost the surrounding loops a register. A receiver whose capture failed is
+			// mostly a script object with a method of the same name, so the miss skips the
+			// other brands' builtins; the runtime dispatcher still runs any builtin.
+			return [
+				...directBrands.flatMap((brand, index) => {
+					const builtin = this.collectionBuiltinCall(
+						`${brand}.prototype.${method}`,
+						receiver,
+						args,
+					)!;
+					const intrinsics = exactCollectionMethodIntrinsics(brand, operation)!;
+					return [
+						`${index === 0 ? "if" : "} else if"} (${callee} == vm->intrinsics[${intrinsics.method}] && mal_value_is_${brand.toLowerCase()}_object(${receiver})) {`,
+						`  MAL_PERF_COUNT(collection_direct_${brand.toLowerCase()}_${method}_hits);`,
+						`  r${instruction.dst} = ${callResult(builtin.boolean ? `mal_value_new_boolean(${builtin.call})` : builtin.call)};`,
+						...(builtin.mayThrow === true ? [`  ${this.throwCheck()}`] : []),
+					];
+				}),
+				`} else if (!mal_value_is_native_function_object(${callee})) {`,
+				`  MAL_PERF_COUNT(collection_direct_fallbacks);`,
+				`  MalCompletion ${tmp} = ${this.profileCall("call", `mal_vm_call_cached(vm, ${callee}, ${receiver}, ${argsExpr}, ${args.length})`)};`,
+				`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
+				`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+				`} else {`,
+				`  MalCompletion ${tmp} = mal_builtin_collection_direct(vm, ${nativeBuiltinCollectionOperation(operation)}, MAL_BUILTIN_COLLECTION_RECEIVER_UNKNOWN, ${callee}, ${receiver}, ${argsExpr}, ${args.length});`,
+				`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
+				`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+				`}`,
+				this.callPoll(),
+			];
+		}
 		if (
-			this.context.nativeBuiltinCollectionCallChainAction?.role === "call" &&
-			this.context.nativeBuiltinCollectionCallChainAction.chain.calleeGuard === "elided"
+			collectionChain?.role === "call" &&
+			collectionChain.chain.calleeGuard === "elided"
 		) {
-			const operation =
-				this.context.nativeBuiltinCollectionCallChainAction.chain.operation;
+			const { operation } = collectionChain.chain;
 			return [
 				this.fixedCollectionCall(
 					operation,

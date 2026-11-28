@@ -209,8 +209,8 @@ function hasLocalSpecializationFeatures(
 	);
 }
 
-const STRING_METHOD_CHAIN_KINDS: ReadonlySet<CoreLocalSpecializationCandidate["kind"]> =
-	new Set(["string-method-chain"]);
+const UNBUDGETED_CHAIN_KINDS: ReadonlySet<CoreLocalSpecializationCandidate["kind"]> =
+	new Set(["string-method-chain", "builtin-collection-call-chain"]);
 
 function isPendingDirectEntry(
 	candidate: PendingCandidate,
@@ -594,12 +594,14 @@ function pendingLocalCandidate(
 		closes === undefined || closes.length === 0
 			? undefined
 			: coreGeneratedCodeOverheadCost({ stateSynchronizations: closes.length });
-	// A String method chain only replaces the method load and dispatch, under a guard
-	// whose miss runs the ordinary call it keeps, so it spends no growth budget. A
-	// charCodeAt chain may also prove an in-bounds position, which costs a loop analysis.
+	// A String method or collection chain only replaces the method load and dispatch,
+	// under a guard whose miss runs the ordinary call it keeps, so it spends no growth
+	// budget. A charCodeAt chain may also prove an in-bounds position, which costs a loop
+	// analysis.
 	const budgeted =
-		candidate.kind !== "string-method-chain" ||
-		candidate.operation === "String.prototype.charCodeAt";
+		candidate.kind !== "builtin-collection-call-chain" &&
+		(candidate.kind !== "string-method-chain" ||
+			candidate.operation === "String.prototype.charCodeAt");
 	const generatedCodeCost = budgeted
 		? cost.estimatedCStatements + (closeOverhead?.estimatedCStatements ?? 0)
 		: 0;
@@ -2815,9 +2817,9 @@ export function buildCoreOptimizationPlan(
 	const specializations: Array<CorePlanSpecialization> = [];
 	const directEntriesByFunction = new Map<CoreFunctionId, Array<CoreDirectEntryPlan>>();
 	const dispatchBudgets = new Map<CoreFunctionId, CoreTransformCandidate>();
-	// A function past the discovery budget still gets the String method chains that cost
-	// no budget; discovering only them scans the function's calls.
-	const selectStringMethodChains = (functionId: CoreFunctionId): void => {
+	// A function past the discovery budget still gets the method chains that cost no
+	// budget; discovering only them scans the function's calls.
+	const selectUnbudgetedChains = (functionId: CoreFunctionId): void => {
 		const fn = program.function(functionId);
 		const cfg = analyses
 			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: functionId })
@@ -2826,7 +2828,7 @@ export function buildCoreOptimizationPlan(
 		for (const candidate of discoverCoreLocalSpecializationCandidates(
 			program,
 			functionId,
-			STRING_METHOD_CHAIN_KINDS,
+			UNBUDGETED_CHAIN_KINDS,
 			options.context,
 		).candidates) {
 			const planned = pendingLocalCandidate(
@@ -2894,7 +2896,7 @@ export function buildCoreOptimizationPlan(
 		if (reason !== undefined) {
 			discovery.skipped++;
 			increment(discovery.skippedByReason, reason);
-			if (opportunity.kind === "local") selectStringMethodChains(opportunity.caller);
+			if (opportunity.kind === "local") selectUnbudgetedChains(opportunity.caller);
 			continue;
 		}
 		service.recordDiscovery(cost);

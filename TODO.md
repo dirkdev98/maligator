@@ -128,16 +128,18 @@ static generated-code size and helper counts do not establish runtime cost.
       saves 99 to 137 per call on small bodies, so the open question is which sites
       deserve the budget.
 
-- [ ] Extend the String method chain's guarded direct form to Map `get`/Set `has`
-      and `re.test` on a const-bound regexp, and to the guarded String sites it still
-      misses (43 of 287 on Express: span exclusions, method loads in another block, and
-      loads with several uses).
+- [ ] Extend the String method chain's guarded direct form to `re.test` on a
+      const-bound regexp and to the guarded String sites it still misses (43 of 287 on
+      Express: span exclusions, method loads in another block, and loads with several
+      uses).
+
+- [ ] Close the last 10 to 18 retired instructions per call between unproven and
+      proven Map/Set calls. The call re-tests the receiver's brand because carrying the
+      capture result across argument evaluation cost javascript-v2's inner loops more
+      than it saved; carry it only when the arguments make no calls.
 
 - [ ] Order program-wide specialization discovery by hotness or cost. The discovery
       budget skips about half of Express's functions for every local specialization.
-
-- [ ] Lower array `length` directly behind an array-kind guard; even a proven array
-      takes the generic path today.
 
 - [ ] Keep number-record regions over class-receiver field loads. An inlined method
       reading `this.x * 2.5 + this.y` on a class-known receiver checks each field

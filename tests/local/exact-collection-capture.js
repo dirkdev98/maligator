@@ -125,11 +125,100 @@ for (let i = 0; i < 200; i++) {
 	assert(hasAny(lookup, "always") === true, "unknown receiver: class with has");
 }
 
+function writeAny(store, key, value) {
+	return store.set(key, value);
+}
+function addAny(store, value) {
+	return store.add(value);
+}
+function deleteAny(store, key) {
+	return store.delete(key);
+}
+function rejects(run) {
+	try {
+		run();
+		return false;
+	} catch (error) {
+		return error instanceof TypeError;
+	}
+}
+class CountingSet extends Set {
+	add(value) {
+		return super.add(`counted:${value}`);
+	}
+	has(value) {
+		return super.has(`counted:${value}`);
+	}
+}
+const ownMethods = new Map([["a", 1]]);
+ownMethods.get = (key) => `own get:${key}`;
+ownMethods.set = () => "own set";
+ownMethods.has = () => "own has";
+ownMethods.delete = () => "own delete";
+const ownAdd = new Set(["a"]);
+ownAdd.add = () => "own add";
+const proxiedMap = new Proxy(new Map([["a", 1]]), {});
+const proxiedSet = new Proxy(new Set(["a"]), {});
+const trappedMap = new Proxy(new Map(), {
+	get: (target, key) => (key === "get" ? () => "trapped get" : Reflect.get(target, key)),
+});
+for (let i = 0; i < 200; i++) {
+	assert(writeAny(looseMap, "b", i) === looseMap, "unknown receiver: Map set");
+	assert(readAny(looseMap, "b") === i, "unknown receiver: Map get after set");
+	assert(hasAny(looseMap, "b") === true, "unknown receiver: Map has");
+	assert(deleteAny(looseMap, "b") === true, "unknown receiver: Map delete");
+	assert(
+		deleteAny(looseMap, "b") === false,
+		"unknown receiver: Map delete of a missing key",
+	);
+	assert(addAny(looseSet, i) === looseSet, "unknown receiver: Set add");
+	assert(hasAny(looseSet, i) === true, "unknown receiver: Set has after add");
+	assert(deleteAny(looseSet, i) === true, "unknown receiver: Set delete");
+	assert(hasAny(looseSet, i) === false, "unknown receiver: Set has after delete");
+	const counting = new CountingSet();
+	assert(addAny(counting, i) === counting, "unknown receiver: Set subclass add");
+	assert(hasAny(counting, i) === true, "unknown receiver: Set subclass has");
+	assert(
+		Set.prototype.has.call(counting, `counted:${i}`),
+		"Set subclass add stores its value",
+	);
+	assert(
+		writeAny(looseSubclass, "b", i) === looseSubclass,
+		"unknown receiver: Map subclass set",
+	);
+	assert(
+		readAny(looseSubclass, "b") === `counted:${i}`,
+		"unknown receiver: Map subclass get",
+	);
+	assert(readAny(ownMethods, "a") === "own get:a", "unknown receiver: own get");
+	assert(writeAny(ownMethods, "a", i) === "own set", "unknown receiver: own set");
+	assert(hasAny(ownMethods, "a") === "own has", "unknown receiver: own has");
+	assert(deleteAny(ownMethods, "a") === "own delete", "unknown receiver: own delete");
+	assert(addAny(ownAdd, i) === "own add", "unknown receiver: own add");
+	assert(
+		rejects(() => readAny(proxiedMap, "a")),
+		"unknown receiver: proxied Map get",
+	);
+	assert(
+		rejects(() => hasAny(proxiedSet, "a")),
+		"unknown receiver: proxied Set has",
+	);
+	assert(
+		rejects(() => addAny(proxiedSet, "a")),
+		"unknown receiver: proxied Set add",
+	);
+	assert(readAny(trappedMap, "a") === "trapped get", "unknown receiver: proxy get trap");
+}
+
 // Replacing the prototype methods after warm-up must reach every site. Locked
 // primordials reject the replacement, and the sites must keep the builtins.
 const originalGet = Map.prototype.get;
 const originalHas = Set.prototype.has;
 const originalWeakGet = WeakMap.prototype.get;
+const originalSet = Map.prototype.set;
+const originalMapDelete = Map.prototype.delete;
+const originalAdd = Set.prototype.add;
+const originalSetDelete = Set.prototype.delete;
 function replaceMethods() {
 	try {
 		Map.prototype.get = function (key) {
@@ -141,6 +230,10 @@ function replaceMethods() {
 		WeakMap.prototype.get = function () {
 			return "patched weak";
 		};
+		Map.prototype.set = () => "patched set";
+		Map.prototype.delete = () => "patched Map delete";
+		Set.prototype.add = () => "patched add";
+		Set.prototype.delete = () => "patched Set delete";
 		return true;
 	} catch (error) {
 		assert(error instanceof TypeError, "locked primordials reject replacement");
@@ -152,14 +245,26 @@ if (replaceMethods()) {
 	assert(plain.mark("never-seen") === false, "replaced Set.prototype.has");
 	assert(plain.weakWrite({}, 3) === "patched weak", "replaced WeakMap.prototype.get");
 	assert(readAny(looseMap, "a") === "patched:1", "replaced get at an unknown site");
+	assert(writeAny(looseMap, "a", 2) === "patched set", "replaced set at an unknown site");
+	assert(deleteAny(looseMap, "a") === "patched Map delete", "replaced Map delete");
+	assert(addAny(looseSet, "z") === "patched add", "replaced add at an unknown site");
+	assert(deleteAny(looseSet, "a") === "patched Set delete", "replaced Set delete");
 	Map.prototype.get = originalGet;
 	Set.prototype.has = originalHas;
 	WeakMap.prototype.get = originalWeakGet;
+	Map.prototype.set = originalSet;
+	Map.prototype.delete = originalMapDelete;
+	Set.prototype.add = originalAdd;
+	Set.prototype.delete = originalSetDelete;
 } else {
 	assert(Map.prototype.get === originalGet, "locked Map.prototype.get is unchanged");
 	assert(plain.weakWrite({}, 3) === 3, "locked WeakMap.prototype.get");
 	assert(readAny(looseMap, "a") === 1, "locked get at an unknown site");
+	assert(writeAny(looseMap, "a", 1) === looseMap, "locked set at an unknown site");
+	assert(addAny(looseSet, "a") === looseSet, "locked add at an unknown site");
 }
+assert(readAny(looseMap, "a") === 1, "restored set at an unknown site");
+assert(hasAny(looseSet, "a") === true, "restored Set delete at an unknown site");
 assert(plain.read("k4") === 1993, "restored Map.prototype.get");
 assert(plain.mark("never-seen") === true, "restored Set.prototype.has");
 assert(plain.mark("never-seen") === false, "restored Set.prototype.has sees the add");
