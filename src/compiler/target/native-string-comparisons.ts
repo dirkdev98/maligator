@@ -148,6 +148,6 @@ export function nativeStringComparisonExpression(
 	const constant = plan.operand === leftOperand ? left : right;
 	const other = plan.operand === leftOperand ? right : left;
 	return plan.kind === "strings"
-		? `mal_string_equals_constant_length(mal_value_to_string(${other}), mal_value_to_string(${constant}), ${plan.length})`
+		? `mal_string_equals_constant(mal_value_to_string(${other}), mal_value_to_string(${constant}), ${plan.length})`
 		: `mal_ops_strict_equal_string_constant(${other}, ${constant}, ${plan.length})`;
 }

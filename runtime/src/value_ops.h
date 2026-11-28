@@ -376,9 +376,8 @@ static inline bool mal_ops_strict_equal_boxed(MalValue left, MalValue right) {
 static inline __attribute__((always_inline)) bool mal_ops_strict_equal_string_constant(
     MalValue value, MalValue constant, u32 length
 ) {
-    if (value == constant) return true;
     if (!mal_value_is_string(value)) return false;
-    return mal_string_equals_constant_length(
+    return mal_string_equals_constant(
         mal_value_to_string(value), mal_value_to_string(constant), length);
 }
 

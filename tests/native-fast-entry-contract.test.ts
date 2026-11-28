@@ -89,6 +89,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_builtin_math_min_max_numbers",
 	"mal_ops_strict_equal_string_constant",
 	"mal_string_equals_constant_length",
+	"mal_string_equals_constant",
 	"mal_value_to_string",
 	"mal_value_from_i32",
 	"mal_value_is_int32",

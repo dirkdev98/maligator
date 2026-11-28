@@ -124,7 +124,7 @@ describe("planned String comparison lengths", () => {
 				expect.objectContaining({ length: 5 }),
 			);
 			expect(out.c.source).toMatch(
-				/mal_(?:ops_strict_equal_string_constant|string_equals_constant_length)\(/,
+				/mal_(?:ops_strict_equal_string_constant|string_equals_constant)\(/,
 			);
 			expect(out.c.source).not.toContain("mal_ops_same_value(");
 			if (!locked) {
@@ -302,7 +302,7 @@ describe("planned String comparison lengths", () => {
 		).toBe(true);
 		expect(
 			emitCompiledFunction(native, native.functionIndex, "", false)!.source,
-		).toContain("mal_string_equals_constant_length(");
+		).toContain("mal_string_equals_constant(");
 		const general = joined(2);
 		expect(() =>
 			validateNativeStorage(

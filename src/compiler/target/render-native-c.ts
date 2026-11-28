@@ -7873,7 +7873,7 @@ function emitStringSwitch(
 		lines.push(`if (!mal_value_is_string(r${site.selector})) { ${fallback} }`);
 	lines.push(`MalString *${value} = mal_value_to_string(r${site.selector});`);
 	const compare = (label: (typeof labels)[number]) =>
-		`if (mal_string_equals(${value}, mal_value_to_string(${relocation.stringValue(label.stringIndex)}))) { ${branch(label.targetIp, label.branchIp)} }`;
+		`if (mal_string_equals_constant(${value}, mal_value_to_string(${relocation.stringValue(label.stringIndex)}), ${label.codeUnits.length})) { ${branch(label.targetIp, label.branchIp)} }`;
 	if (strategy === "code-unit") {
 		lines.push(`if (${value}->length != 1) { ${fallback} }`);
 		lines.push(`switch (mal_string_code_unit_at(${value}, 0)) {`);

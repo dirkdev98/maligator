@@ -453,6 +453,28 @@ static inline bool mal_string_equals(const MalString *left, const MalString *rig
 }
 
 /**
+ * Equality with a string constant of `length` units. Most comparisons against a
+ * literal reject a different string, so the length decides before the constant's
+ * address is computed, and a chain of comparisons on one string loads its length once.
+ */
+static inline __attribute__((always_inline)) bool mal_string_equals_constant(
+    const MalString *string, const MalString *constant, u32 length
+) {
+    MAL_PERF_COUNT(string_equals_calls);
+    if (string->length != length) {
+        MAL_PERF_COUNT(string_length_misses);
+        return false;
+    }
+    if (string == constant) {
+        MAL_PERF_COUNT(string_pointer_hits);
+        return true;
+    }
+    // Interning keeps one atom per content, so two different atoms differ.
+    if (string->property_atom && constant->property_atom) return false;
+    return mal_string_equals_same_length(string, constant);
+}
+
+/**
  * Lexicographically compare two strings by UTF-16 code units.
  */
 i32 mal_string_compare(const MalString *left, const MalString *right);
