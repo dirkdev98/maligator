@@ -128,7 +128,9 @@ static MalArrayObject *regexp_legacy_state(MalVm *vm) {
 
 // This private intrinsic stays dense and unobserved, so a replacement needs only the
 // collector's barriers, not the general element store.
-static void regexp_legacy_replace(MalArrayObject *state, RegexpLegacySlot slot, MalValue value) {
+static __attribute__((noinline)) void regexp_legacy_replace(
+    MalArrayObject *state, RegexpLegacySlot slot, MalValue value
+) {
     assert((u32) slot < state->dense_count);
     mal_gc_write_barrier(state->elements[slot]);
     state->elements[slot] = value;
@@ -155,7 +157,9 @@ static RegexpLegacySlot regexp_legacy_paren_start_slot(i32 group) {
     return (RegexpLegacySlot) (REGEXP_LEGACY_SLOT_PAREN_START + 2 * (group - 1));
 }
 
-static void regexp_legacy_update(
+// Inlined into the exec and test hits, which record every match, so only the
+// barriered replacements take a call.
+static inline __attribute__((always_inline)) void regexp_legacy_record(
     MalVm *vm, MalString *subject, const int32_t *captures, int32_t group_count
 ) {
     MalArrayObject *state = regexp_legacy_state(vm);
@@ -185,6 +189,12 @@ static void regexp_legacy_update(
         slots[REGEXP_LEGACY_SLOT_LAST_PAREN_START] = mal_value_from_i32(captures[2 * last]);
         slots[REGEXP_LEGACY_SLOT_LAST_PAREN_END] = mal_value_from_i32(captures[2 * last + 1]);
     }
+}
+
+static __attribute__((noinline)) void regexp_legacy_update(
+    MalVm *vm, MalString *subject, const int32_t *captures, int32_t group_count
+) {
+    regexp_legacy_record(vm, subject, captures, group_count);
 }
 
 static MalValue regexp_legacy_capture(
@@ -901,8 +911,9 @@ static inline __attribute__((always_inline)) bool regexp_set_last_index(
 
 static MalRegExpGroupLayout regexp_unnamed_layout;
 
-static MalRegExpGroupLayout *regexp_group_layout(MalVm *vm, MalRegExpObject *re) {
-    if (re->group_layout != nullptr) return re->group_layout;
+static __attribute__((noinline)) MalRegExpGroupLayout *regexp_group_layout_create(
+    MalVm *vm, MalRegExpObject *re
+) {
     i32 count = mal_regexp_require_engine()->capture_name_count(re->matcher);
     if (count == 0) {
         re->group_layout = &regexp_unnamed_layout;
@@ -959,11 +970,17 @@ static MalRegExpGroupLayout *regexp_group_layout(MalVm *vm, MalRegExpObject *re)
     return layout;
 }
 
+// Every result reads the layout, which is built once per matcher; the hit keeps the
+// builder's frame off the exec path.
+static inline MalRegExpGroupLayout *regexp_group_layout(MalVm *vm, MalRegExpObject *re) {
+    return re->group_layout != nullptr ? re->group_layout : regexp_group_layout_create(vm, re);
+}
+
 // Both named views select values from their already built numeric captures. In
 // particular, an indices name must reuse that capture's pair, even when another
 // capture has the same range. Duplicate names select the participating alternative.
 static MalValue regexp_build_groups(
-    MalVm *vm, const MalRegExpGroupLayout *layout, const MalArrayObject *captures
+    MalVm *vm, const MalRegExpGroupLayout *layout, const MalValue *captures, u32 capture_count
 ) {
     if (layout->count == 0) return mal_value_new_undefined();
     MalValue inline_values[MAL_SHAPE_MAX_INLINE_SLOTS];
@@ -976,8 +993,9 @@ static MalValue regexp_build_groups(
     for (u32 i = 0; i < layout->distinct_count; i++) values[i] = mal_value_new_undefined();
     for (u32 i = 0; i < layout->count; i++) {
         const MalRegExpNamedCapture *capture = &layout->captures[i];
-        assert(capture->capture < captures->length);
-        MalValue value = captures->elements[capture->capture];
+        assert(capture->capture < capture_count);
+        (void) capture_count;
+        MalValue value = captures[capture->capture];
         if (!mal_value_is_undefined(value)) values[capture->slot] = value;
     }
     MalObject *groups;
@@ -1028,7 +1046,7 @@ static MalValue regexp_build_indices(
         mal_array_object_fresh_dense_append_reserved(indices, entry);
     }
     if (layout->count != 0) {
-        groups = regexp_build_groups(vm, layout, indices);
+        groups = regexp_build_groups(vm, layout, indices->elements, indices->length);
         mal_object_field_store_shaped((MalObject *) indices, 0, groups);
     }
     return mal_value_from_object((MalObject *) indices);
@@ -1098,15 +1116,14 @@ static void regexp_match_offsets_dispose(RegexpMatchOffsets *offsets) {
     if (offsets->pairs != offsets->inline_pairs) free(offsets->pairs);
 }
 
-// Runs the matcher from `start`: the group count with the captures in `caps`, 0
-// without a match, or -1 with a pending throw. Inlined because a fast plan's whole
-// match can cost less than another call frame.
-static inline __attribute__((always_inline)) int32_t regexp_matcher_exec(
-    MalVm *vm, void *matcher, MalString *s, usize start, int32_t *caps, int32_t caps_cap
+// The backtracking engine, with its subject caches and retained scratch, for a
+// pattern without an allocation-free plan.
+static __attribute__((noinline)) int32_t regexp_matcher_exec_general(
+    MalVm *vm, void *matcher, MalString *s, MalStringSegment subject, usize start,
+    int32_t *caps, int32_t caps_cap
 ) {
     u32 execution_flags = 0;
     usize length = mal_string_length(s);
-    MalStringSegment subject = mal_string_flat_segment(s);
     const MalRegExpEngine *engine = mal_regexp_require_engine();
     int32_t ngroups = subject.latin1
         ? engine->exec_latin1(
@@ -1145,6 +1162,32 @@ static inline __attribute__((always_inline)) int32_t regexp_matcher_exec(
     return ngroups;
 }
 
+// Runs the matcher from `start`, at most the subject's length: the group count with
+// the captures in `caps`, 0 without a match, or -1 with a pending throw. Inlined
+// because a fast plan's whole match can cost less than another call frame. A fast
+// plan takes neither the subject's identity nor scratch accounting, so its entry
+// gets only the units and its hit enters the plan walk with one call.
+static inline __attribute__((always_inline)) int32_t regexp_matcher_exec(
+    MalVm *vm, void *matcher, MalString *s, usize start, int32_t *caps, int32_t caps_cap
+) {
+    assert(caps_cap >= MAL_REGEXP_FAST_CAPTURE_SLOTS);
+    usize length = mal_string_length(s);
+    assert(start <= length);
+    MalStringSegment subject = mal_string_flat_segment(s);
+    const MalRegExpEngine *engine = mal_regexp_require_engine();
+    int32_t ngroups = subject.latin1
+        ? engine->exec_fast_latin1(matcher, subject.latin1_units, length, start, caps)
+        : engine->exec_fast_utf16(
+            matcher, (const uint16_t *) subject.utf16_units, length, start, caps);
+    if (ngroups != MAL_REGEXP_EXEC_NO_FAST_PLAN) {
+        MAL_PERF_COUNT(regexp_exec_calls);
+        if (subject.latin1) MAL_PERF_COUNT(regexp_latin1_exec_calls);
+        MAL_PERF_COUNT(regexp_fast_exec_calls);
+        return ngroups;
+    }
+    return regexp_matcher_exec_general(vm, matcher, s, subject, start, caps, caps_cap);
+}
+
 // RegExpBuiltinExec's match decision from a lastIndex its caller has already applied,
 // for a result nobody reads: 1 on a match, which records the legacy statics, 0
 // without one, -1 with a pending throw.
@@ -1156,7 +1199,7 @@ static int regexp_match_only(
     if (ngroups <= 0) return ngroups < 0 ? -1 : 0;
     if ((flag_bits & MAL_REGEXP_JS_STICKY) != 0 && (usize) stack_caps[0] != start) return 0;
     if (ngroups <= 32) {
-        regexp_legacy_update(vm, s, stack_caps, ngroups);
+        regexp_legacy_record(vm, s, stack_caps, ngroups);
         return 1;
     }
     // The statics read the last group, which only the matcher's retained copy holds.
@@ -1204,7 +1247,7 @@ static inline __attribute__((always_inline)) MalValue regexp_builtin_exec_result
     int32_t match_start = caps[0];
     int32_t match_end = caps[1];
 
-    regexp_legacy_update(vm, s, caps, ngroups);
+    regexp_legacy_record(vm, s, caps, ngroups);
 
     if (result_kind == REGEXP_BUILTIN_EXEC_MATCH_ONLY) {
         if (heap_caps != nullptr) free(heap_caps);
@@ -1307,11 +1350,30 @@ static inline __attribute__((always_inline)) MalValue regexp_builtin_exec_result
         if (heap_caps != nullptr) free(heap_caps);
         return mal_value_new_undefined();
     }
+    // Allocation never collects, so the pieces wait in C storage until the result is
+    // created with all of them in one step. Creation order is unobservable: the
+    // result, its groups and its indices stay private until returned.
+    MalValue inline_elements[32];
+    MalValue *elements = inline_elements;
+    if (ngroups > 32) {
+        elements = malloc(sizeof(MalValue) * (usize) ngroups);
+        if (elements == nullptr) {
+            free(heap_caps);
+            regexp_throw_string_length(vm);
+            return mal_value_new_undefined();
+        }
+    }
+    for (int32_t i = 0; i < ngroups; i++) {
+        int32_t cs = caps[2 * i];
+        int32_t ce = caps[2 * i + 1];
+        elements[i] = cs < 0 ? mal_value_new_undefined() : regexp_substring(vm, s, cs, ce);
+    }
     MalValue named_values[4] = {
         mal_value_from_f64((f64) match_start),
         mal_value_from_string(s),
-        mal_value_new_undefined(),
-        mal_value_new_undefined(),
+        layout->count == 0 ? mal_value_new_undefined()
+            : regexp_build_groups(vm, layout, elements, (u32) ngroups),
+        has_indices ? regexp_build_indices(vm, layout, caps, ngroups) : mal_value_new_undefined(),
     };
     MalShape **shape_slot = has_indices
         ? &vm->regexp_result_indices_shape
@@ -1326,27 +1388,13 @@ static inline __attribute__((always_inline)) MalValue regexp_builtin_exec_result
         };
         *shape_slot = mal_shape_from_string_keys(&vm->heap, keys, named_count);
     }
-    MalArrayObject *array = mal_array_object_new_shaped_reserved(
+    MalArrayObject *array = mal_array_object_new_shaped_from_values(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]),
-        (u32) ngroups, *shape_slot, named_values, named_count);
-    for (int32_t i = 0; i < ngroups; i++) {
-        int32_t cs = caps[2 * i];
-        int32_t ce = caps[2 * i + 1];
-        MalValue element = cs < 0 ? mal_value_new_undefined() : regexp_substring(vm, s, cs, ce);
-        mal_array_object_fresh_dense_append_reserved(array, element);
-    }
-
-    if (layout->count != 0) {
-        MalValue groups = regexp_build_groups(vm, layout, array);
-        mal_object_field_store_shaped((MalObject *) array, 2, groups);
-    }
-    if (has_indices) {
-        MalValue indices = regexp_build_indices(vm, layout, caps, ngroups);
-        mal_object_field_store_shaped((MalObject *) array, 3, indices);
-    }
+        *shape_slot, named_values, named_count, elements, (u32) ngroups);
+    if (elements != inline_elements) free(elements);
 
     if (heap_caps != nullptr) free(heap_caps);
-    return mal_value_from_object((MalObject *) array);
+    return mal_value_from_array_object(array);
 }
 
 // RegExpBuiltinExec(R, S) from its flags on, for the lastIndex its caller read and

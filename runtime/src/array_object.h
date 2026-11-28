@@ -401,6 +401,13 @@ MalArrayObject *mal_array_object_new_shaped_reserved(
     MalHeap *heap, MalObject *prototype, u32 capacity,
     MalShape *shape, const MalValue *values, u32 count
 );
+/** Create a private Array with its final named shape and `count` dense elements, all
+ * known up front, in one cell when the elements fit it. Named and element values must
+ * remain rooted across the allocation. */
+MalArrayObject *mal_array_object_new_shaped_from_values(
+    MalHeap *heap, MalObject *prototype, MalShape *shape, const MalValue *named,
+    u32 named_count, const MalValue *elements, u32 count
+);
 MalArrayObject *mal_array_object_try_new(MalHeap *heap, MalObject *prototype);
 MalArrayObject *mal_array_object_new_with_length_slow(
     MalHeap *heap, MalObject *prototype, u32 length

@@ -684,6 +684,64 @@ MalArrayObject *mal_array_object_new_shaped_reserved(
     return array;
 }
 
+MalArrayObject *mal_array_object_new_shaped_from_values(
+    MalHeap *heap, MalObject *prototype, MalShape *shape, const MalValue *named,
+    u32 named_count, const MalValue *elements, u32 count
+) {
+    assert(shape->inline_count == named_count && named_count <= MAL_SHAPE_MAX_INLINE_SLOTS);
+#if !MAL_PERF_STATS
+    if (count <= MAL_ARRAY_INLINE_CAPACITY_MAX) {
+        // Every traced word is written below before anything can allocate or reach a
+        // safepoint, so the cell needs no clearing.
+        MalArrayObject *array = mal_heap_alloc_uninitialized(
+            heap, sizeof(*array) + sizeof(MalValue) * count +
+                sizeof(MalObjectFieldStorage) + sizeof(MalValue) * named_count,
+            MAL_HEAP_ARRAY_OBJECT);
+        MalHeapHeader header = array->object.header;
+        MalValue *dense = mal_array_object_inline_elements(array);
+        MalObjectFieldStorage *storage = (MalObjectFieldStorage *) (dense + count);
+        *array = (MalArrayObject) {
+            .object = {
+                .header = header,
+                .extensible = true,
+                .storage_kind = MAL_OBJECT_EXTERNAL,
+                .slot_capacity = (u8) named_count,
+                .shape = shape,
+            },
+            .object_storage = {.external = &storage->storage},
+            .elements = count == 0 ? nullptr : dense,
+            .length = count,
+            .capacity = count,
+            .dense_count = count,
+            .length_writable = true,
+            .dense_elements_writable = true,
+            .dense_elements_configurable = true,
+            .inline_capacity = count,
+        };
+        storage->storage = (MalObjectStorage) {.prototype = prototype, .fields = storage->fields};
+        for (u32 i = 0; i < named_count; i++) storage->fields[i] = named[i];
+        for (u32 i = 0; i < count; i++) dense[i] = elements[i];
+        mal_object_mark_as_prototype(prototype);
+        // External storage marks its cell finalizable even in place, as the generic
+        // constructor does, so later field growth needs no extra bookkeeping.
+        mal_heap_cell_needs_finalizer(&array->object.header);
+        // Incremental major marking allocates black/old cells; those still need cards.
+        if (mal_heap_mark_is_old(header.mark)) {
+            for (u32 i = 0; i < named_count; i++) mal_gc_card(&array->object.header, named[i]);
+            for (u32 i = 0; i < count; i++) mal_gc_card(&array->object.header, elements[i]);
+        }
+        return array;
+    }
+#endif
+    // Stats builds observe each element through the generic appends.
+    MalArrayObject *array = mal_array_object_new_shaped_reserved(
+        heap, prototype, count, shape, named, named_count);
+    for (u32 i = 0; i < count; i++) {
+        mal_array_object_fresh_dense_append_reserved(array, elements[i]);
+    }
+    return array;
+}
+
 /** 512 KiB of elements: what a sparse `new Array(n)` may hold before its first store. */
 #define MAL_ARRAY_CREATE_RESERVE_MAX 65536u
 

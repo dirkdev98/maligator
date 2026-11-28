@@ -28,7 +28,7 @@ use regress::{AsciiMatches, AsciiScratch, Flags, Match, Regex, WideScratch};
 use crate::ffi::{nullable_slice, nullable_u16_slice};
 
 /// Ownership and execution contract mirrored by `mal_regexp.h`.
-pub const MAL_REGEXP_ABI_VERSION: u32 = 13;
+pub const MAL_REGEXP_ABI_VERSION: u32 = 14;
 
 const EXEC_ASCII: u32 = 1 << 0;
 const EXEC_CACHE_HIT: u32 = 1 << 1;
@@ -52,6 +52,8 @@ const ASCII_SUBJECT_CACHE_MAX_BYTES: usize = 64 * 1024;
 const LATIN1_WIDE_RETAINED_UNITS: usize = 64 * 1024;
 const FAST_CAPTURE_CAPACITY: usize = 31;
 const FAST_CAPTURE_SLOTS: usize = (FAST_CAPTURE_CAPACITY + 1) * 2;
+// The fast exec entries' callers size their buffers by MAL_REGEXP_FAST_CAPTURE_SLOTS.
+const _: () = assert!(FAST_CAPTURE_SLOTS == 64);
 
 /// A set of UTF-16 code units: a bitmap below 256 and sorted disjoint ranges above.
 #[derive(Debug, Clone)]
@@ -550,6 +552,9 @@ impl FastPattern {
         Some(position)
     }
 
+    // Inlined with `find_admitted` into the exec frame, so a hit enters the plan walk
+    // through the exec entry's one out-of-line call.
+    #[inline(always)]
     fn match_at<U: SubjectUnit>(
         &self,
         subject: &[U],
@@ -622,6 +627,7 @@ impl FastPattern {
 
     /// `find` for a search `rejects_single_position` has admitted. An anchored plan
     /// starts past the prefix units, so it must never run without that test.
+    #[inline(always)]
     fn find_admitted<U: SubjectUnit>(
         &self,
         subject: &[U],
@@ -1987,8 +1993,11 @@ fn fast_rejects_one_position<U: SubjectUnit>(
     true
 }
 
-/// Runs the allocation-free plan, which writes its captures straight into the
-/// retained slots, for a search `fast_rejects_one_position` has admitted.
+/// Runs the allocation-free plan for a search `fast_rejects_one_position` has
+/// admitted. A caller buffer that holds every plan's groups receives the captures
+/// directly, and the match is not retained, since no copy can be asked for; a
+/// smaller buffer gets a copy of the retained slots.
+#[inline(always)]
 fn fast_exec<U: SubjectUnit>(
     cp: &mut CompiledPattern,
     subject: &[U],
@@ -1996,8 +2005,19 @@ fn fast_exec<U: SubjectUnit>(
     caps_out: *mut i32,
     caps_cap: i32,
 ) -> i32 {
-    cp.last = None;
+    // As in `fast_rejects_one_position`: a pattern with a fast plan reaches the
+    // general executor only past the subject's end, which leaves `last` empty.
+    debug_assert!(cp.last.is_none());
     let fast = cp.fast.as_ref().expect("fast plan exists");
+    if !caps_out.is_null() && caps_cap >= FAST_CAPTURE_SLOTS as i32 {
+        cp.fast_last_groups = 0;
+        let slots = unsafe { &mut *caps_out.cast::<[i32; FAST_CAPTURE_SLOTS]>() };
+        return if fast.find_admitted(subject, start, slots, cp.sticky) {
+            (fast.capture_count + 1) as i32
+        } else {
+            0
+        };
+    }
     if !fast.find_admitted(subject, start, &mut cp.fast_last_captures, cp.sticky) {
         cp.fast_last_groups = 0;
         return 0;
@@ -2241,6 +2261,59 @@ fn find_wide(
             sticky,
         )
     }
+}
+
+/// What the fast exec entries return for a pattern without an allocation-free plan.
+const EXEC_NO_FAST_PLAN: i32 = -2;
+
+/// Runs the allocation-free plan, if the pattern has one, from a `start` the caller
+/// has bounded by the subject length. `caps_out` holds `FAST_CAPTURE_SLOTS` slots,
+/// which every plan's groups fit. Unlike `mal_regexp_exec`, this entry takes no
+/// subject identity, reports no execution flags and retains no scratch, so a hit
+/// reaches the plan walk through one out-of-line call.
+#[no_mangle]
+pub unsafe extern "C" fn mal_regexp_exec_fast(
+    handle: *mut core::ffi::c_void,
+    subject: *const u16,
+    subject_len: usize,
+    start: usize,
+    caps_out: *mut i32,
+) -> i32 {
+    let Some(cp) = (unsafe { (handle as *mut CompiledPattern).as_mut() }) else {
+        return EXEC_NO_FAST_PLAN;
+    };
+    if cp.fast.is_none() {
+        return EXEC_NO_FAST_PLAN;
+    }
+    debug_assert!(start <= subject_len);
+    let subj = unsafe { nullable_u16_slice(subject, subject_len) };
+    if fast_rejects_one_position(cp, subj, start) {
+        return 0;
+    }
+    fast_exec_utf16(cp, subj, start, caps_out, FAST_CAPTURE_SLOTS as i32)
+}
+
+/// `mal_regexp_exec_fast` over compact Latin-1 bytes.
+#[no_mangle]
+pub unsafe extern "C" fn mal_regexp_exec_fast_latin1(
+    handle: *mut core::ffi::c_void,
+    subject: *const u8,
+    subject_len: usize,
+    start: usize,
+    caps_out: *mut i32,
+) -> i32 {
+    let Some(cp) = (unsafe { (handle as *mut CompiledPattern).as_mut() }) else {
+        return EXEC_NO_FAST_PLAN;
+    };
+    if cp.fast.is_none() {
+        return EXEC_NO_FAST_PLAN;
+    }
+    debug_assert!(start <= subject_len);
+    let subj = unsafe { nullable_slice(subject, subject_len) };
+    if fast_rejects_one_position(cp, subj, start) {
+        return 0;
+    }
+    fast_exec_latin1(cp, subj, start, caps_out, FAST_CAPTURE_SLOTS as i32)
 }
 
 /// Execute against `subject` (UTF-16) starting at code-unit index `start`.
@@ -3221,6 +3294,69 @@ mod tests {
         );
         assert_eq!(retained, captures);
         unsafe { mal_regexp_release(compiled) };
+    }
+
+    #[test]
+    fn fast_entries_agree_with_the_general_entries_and_decline_other_patterns() {
+        let route = r"^\/users\/([^\/]+)(\/)?$";
+        let cases = [
+            (route, FLAG_IGNORE_CASE, "/USERS/a%20b/", 3),
+            (route, FLAG_IGNORE_CASE, "/users/42", 3),
+            (route, FLAG_IGNORE_CASE, "/middleware", 0),
+            (r"\s*([^;\s]*)(?:;|\s|$)", 0, "  text/plain ;q=1", 2),
+            (r"(\d+)", FLAG_STICKY, "a12", 0),
+        ];
+        for (pattern, flags, subject, expected) in cases {
+            let compiled = unsafe { handle(&utf16(pattern), flags) };
+            let units = utf16(subject);
+            let mut general = [-1; FAST_CAPTURE_SLOTS];
+            let general_groups = unsafe {
+                mal_regexp_exec(
+                    compiled,
+                    units.as_ptr(),
+                    units.len(),
+                    0,
+                    core::ptr::null(),
+                    0,
+                    0,
+                    general.as_mut_ptr(),
+                    6,
+                    core::ptr::null_mut(),
+                )
+            };
+            let mut wide = [-1; FAST_CAPTURE_SLOTS];
+            let wide_groups = unsafe {
+                mal_regexp_exec_fast(compiled, units.as_ptr(), units.len(), 0, wide.as_mut_ptr())
+            };
+            let mut narrow = [-1; FAST_CAPTURE_SLOTS];
+            let narrow_groups = unsafe {
+                mal_regexp_exec_fast_latin1(
+                    compiled,
+                    subject.as_ptr(),
+                    subject.len(),
+                    0,
+                    narrow.as_mut_ptr(),
+                )
+            };
+            assert_eq!(
+                (general_groups, wide_groups, narrow_groups),
+                (expected, expected, expected)
+            );
+            let slots = 2 * expected as usize;
+            assert_eq!(wide[..slots], general[..slots], "{pattern} on {subject}");
+            assert_eq!(narrow[..slots], general[..slots], "{pattern} on {subject}");
+            unsafe { mal_regexp_release(compiled) };
+        }
+
+        let backreference = unsafe { handle(&utf16(r"(a)\1"), 0) };
+        let mut caps = [-1; FAST_CAPTURE_SLOTS];
+        assert_eq!(
+            unsafe {
+                mal_regexp_exec_fast_latin1(backreference, b"aa".as_ptr(), 2, 0, caps.as_mut_ptr())
+            },
+            EXEC_NO_FAST_PLAN
+        );
+        unsafe { mal_regexp_release(backreference) };
     }
 
     #[test]

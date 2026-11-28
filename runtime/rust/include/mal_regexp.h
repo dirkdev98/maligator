@@ -22,7 +22,7 @@ extern "C" {
 #endif
 
 /* Bump with regexp.rs when the ownership or execution contract changes. */
-#define MAL_REGEXP_ABI_VERSION 13u
+#define MAL_REGEXP_ABI_VERSION 14u
 
 /* Returns the ABI version compiled into the linked archive. */
 uint32_t mal_regexp_abi_version(void);
@@ -86,6 +86,20 @@ int32_t mal_regexp_exec_latin1(void *handle, const uint8_t *subject, size_t subj
                                int32_t *caps_out, int32_t caps_cap,
                                uint32_t *execution_flags_out);
 
+/* Returned by the fast entries for a pattern without an allocation-free plan. */
+#define MAL_REGEXP_EXEC_NO_FAST_PLAN (-2)
+/* Capture slots a fast entry may write: every allocation-free plan's groups fit. */
+#define MAL_REGEXP_FAST_CAPTURE_SLOTS 64
+
+/* mal_regexp_exec for a pattern's allocation-free plan only, from a `start` no
+ * greater than subject_len, into MAL_REGEXP_FAST_CAPTURE_SLOTS slots. Returns the
+ * group count, 0 on no match, or MAL_REGEXP_EXEC_NO_FAST_PLAN; the plan retains no
+ * scratch and needs no subject identity. */
+int32_t mal_regexp_exec_fast(void *handle, const uint16_t *subject, size_t subject_len,
+                             size_t start, int32_t *caps_out);
+int32_t mal_regexp_exec_fast_latin1(void *handle, const uint8_t *subject,
+                                    size_t subject_len, size_t start, int32_t *caps_out);
+
 /* Collect nonoverlapping matches of an allocation-free, code-unit plan. Returns
  * its group count, or 0 without changing matcher state when no such plan exists.
  * Writes complete capture rows into caps_out, reporting their slot count and
@@ -100,7 +114,9 @@ int32_t mal_regexp_collect_fast(void *handle, const void *subject, size_t subjec
                                 size_t *attempts_out);
 
 /* Copy the most recent successful match's capture pairs into caps_out without
- * re-matching; returns the group count, or 0 if no match is retained. */
+ * re-matching; returns the group count, or 0 if no match is retained. A match whose
+ * exec buffer held MAL_REGEXP_FAST_CAPTURE_SLOTS slots may not be retained when
+ * every group fitted it. */
 int32_t mal_regexp_copy_captures(void *handle, int32_t *caps_out, int32_t caps_cap);
 
 /* Named captures in source order, including duplicate names in alternatives.

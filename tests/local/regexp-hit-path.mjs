@@ -184,4 +184,84 @@ results.subclass = (() => {
 	return steps;
 })();
 
+// Exec results are created whole, with their elements, `index`, `input`, `groups` and
+// `indices`, so their observable layout must match one built property by property.
+const layout = (match) =>
+	match === null
+		? null
+		: {
+				keys: Reflect.ownKeys(match),
+				descriptors: Object.entries(Object.getOwnPropertyDescriptors(match)).map(
+					([key, d]) => [key, d.writable, d.enumerable, d.configurable, "value" in d],
+				),
+				isArray: Array.isArray(match),
+				arrayPrototype: Object.getPrototypeOf(match) === Array.prototype,
+				groupsPrototype:
+					match.groups === undefined ? "none" : Object.getPrototypeOf(match.groups),
+				groupsKeys: match.groups === undefined ? null : Reflect.ownKeys(match.groups),
+				indexLayout:
+					match.indices === undefined
+						? null
+						: {
+								keys: Reflect.ownKeys(match.indices),
+								groups:
+									match.indices.groups === undefined
+										? "none"
+										: { ...match.indices.groups },
+							},
+				described: describe(match),
+			};
+
+results.resultLayout = (() => {
+	const many = (count) => new RegExp(`^${"(\\w)".repeat(count)}(x)?`);
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJ";
+	return [
+		/^\/users\/([^/]+)(\/)?$/i.exec("/users/42"),
+		/^\/users\/([^/]+)(\/)?$/i.exec("/USERS/a%20b/"),
+		/(?<word>[a-z]+)(?<digits>\d+)?/.exec("--abc--"),
+		/(?<word>[a-z]+)|(?<word>\d+)/.exec("42"),
+		/(a)(?<n>b)?(c)?/d.exec("xa"),
+		/(?<k>\w+)=(?<v>\w*)/d.exec("key=value"),
+		/q/d.exec("aq"),
+		many(14).exec(letters),
+		many(15).exec(letters),
+		many(33).exec(letters),
+		/never/.exec("subject"),
+	].map(layout);
+})();
+
+results.resultMutation = (() => {
+	const match = /(\w+)@(?<host>\w+)/.exec("user@host");
+	match.extra = "added";
+	match.push("pushed");
+	match.groups.port = 80;
+	match.index = -1;
+	delete match.input;
+	const growing = /(a)(b)/.exec("ab");
+	for (let i = 0; i < 20; i++) growing[`k${i}`] = i;
+	growing.length = 1;
+	return [layout(match), match.extra, layout(growing), growing.k19];
+})();
+
+results.lastIndexEffects = (() => {
+	const steps = [];
+	const global = /(\d)/g;
+	const sticky = /(\d)/y;
+	for (const re of [global, sticky]) {
+		for (const subject of ["a1b2", "a1b2", "12", "12", "12"]) {
+			steps.push({ match: describe(re.exec(subject)), lastIndex: re.lastIndex });
+		}
+		re.lastIndex = "1";
+		steps.push({ test: re.test("12"), lastIndex: re.lastIndex });
+		re.lastIndex = { valueOf: () => (steps.push("valueOf"), 0) };
+		steps.push({ match: describe(re.exec("x9")), lastIndex: re.lastIndex });
+		re.lastIndex = 99;
+		steps.push({ match: describe(re.exec("12")), lastIndex: re.lastIndex });
+	}
+	const plain = /(\d)/;
+	plain.lastIndex = 5;
+	steps.push({ match: describe(plain.exec("12")), lastIndex: plain.lastIndex });
+	return steps;
+})();
+
 console.log(JSON.stringify(results));

@@ -531,12 +531,13 @@ distinct when measuring text work.
       only keys interned pattern strings, so `new RegExp(source)` with a computed
       `source` recompiles on every call, even when the same text repeats.
 
-- [ ] Shorten the RegExp exec hit path further. A route exec hit costs about 1,400
-      instructions against Node's 790 and a `test()` hit about 780 against 400. What
-      remains: the result Array constructor and its appends (about 280, in
-      `array_object.c`), the C-to-Rust exec call and four nested Rust frames before
-      the plan walk (about 230), the recursive plan walk (about 180 for a route) and
-      the barriered legacy subject store when the subject changes (about 31).
+- [ ] Shorten the RegExp exec hit path further. A route exec hit costs about 1,220
+      instructions against Node's 740; `test()` and projected execs now run at or below
+      Node. Inside the call (825): the C entry and RegExpBuiltinExec frame with its
+      stack-protected capture buffer (about 260), the recursive plan walk (about 170),
+      the one-cell result (about 140) and capture substrings (about 105). Misses pay
+      the same entry frame (80 of 166), and results with `d`-flag `indices` still
+      build through reserve and appends.
 
 - [ ] Reuse one-unit strings above 0xFF. `mal_intrinsic_code_unit` caches units up to
       0xFF only, so `str[i]`, `charAt`, `for...of` and the String iterator allocate a

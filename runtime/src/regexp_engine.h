@@ -13,6 +13,8 @@ typedef struct MalRegExpEngine {
     typeof(&mal_regexp_scratch_delta) scratch_delta;
     typeof(&mal_regexp_exec) exec_utf16;
     typeof(&mal_regexp_exec_latin1) exec_latin1;
+    typeof(&mal_regexp_exec_fast) exec_fast_utf16;
+    typeof(&mal_regexp_exec_fast_latin1) exec_fast_latin1;
     typeof(&mal_regexp_collect_fast) collect_fast;
     typeof(&mal_regexp_copy_captures) copy_captures;
     typeof(&mal_regexp_capture_name_count) capture_name_count;
