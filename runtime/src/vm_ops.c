@@ -3101,7 +3101,7 @@ bool mal_vm_inherited_stub_try_load_static(
         stub += MAL_INHERITED_STUB_CACHE_SET_COUNT;
         if (!mal_vm_inherited_try_load(vm, receiver, site->key, stub, out)) return false;
     }
-    MAL_FEEDBACK_OBSERVE_SHARED(site, object, stub->mode);
+    MAL_FEEDBACK_OBSERVE_SHARED(site, receiver, stub->mode, *out);
     return true;
 }
 
@@ -3291,7 +3291,7 @@ mal_vm_property_try_load_static_missing_fallback(
         return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
     }
     if (mal_vm_builtin_chain_missing(vm, receiver, ic->key)) {
-        MAL_FEEDBACK_OBSERVE_SHARED(ic, object, MAL_IC_MODE_MISSING);
+        MAL_FEEDBACK_OBSERVE_SHARED(ic, receiver, MAL_IC_MODE_MISSING, MAL_VALUE_UNDEFINED);
         MAL_PERF_COUNT(ic_load_builtin_missing_hits);
         return (MalStaticPropertyProbeResult) {.hit = true, .value = MAL_VALUE_UNDEFINED};
     }
@@ -7223,7 +7223,7 @@ __attribute__((noinline)) MalValue mal_vm_loop_invariant_load_miss(
 
 MalValue mal_vm_load_known_own_data_miss(MalObject *object, MalValue key_value, MalInlineCache *ic) {
     assert(object->header.type == MAL_HEAP_OBJECT);
-    if (ic != nullptr) MAL_FEEDBACK_OBSERVE_MISS(ic, object, key_value, false);
+    if (ic != nullptr) MAL_FEEDBACK_OBSERVE_MISS(ic, mal_feedback_receiver(object), key_value, false);
     assert(mal_value_is_string(key_value));
     MalKey key = mal_key_from_value(key_value);
     u32 index;
@@ -7246,7 +7246,7 @@ MalValue mal_vm_load_known_own_data_miss(MalObject *object, MalValue key_value, 
 
 void mal_vm_store_known_own_data_miss(MalObject *object, MalValue key_value, MalValue value, MalInlineCache *ic) {
     assert(object->header.type == MAL_HEAP_OBJECT);
-    if (ic != nullptr) MAL_FEEDBACK_OBSERVE_MISS(ic, object, key_value, true);
+    if (ic != nullptr) MAL_FEEDBACK_OBSERVE_MISS(ic, mal_feedback_receiver(object), key_value, true);
     assert(mal_value_is_string(key_value));
     MalKey key = mal_key_from_value(key_value);
     u32 index;
@@ -7277,7 +7277,7 @@ bool mal_vm_load_known_own_slot_miss(
     i32 candidate_count, const i32 *candidates, MalValue *out
 ) {
     // A seeded row keeps the site's static key.
-    MAL_FEEDBACK_OBSERVE_MISS(ic, object, ic->key, false);
+    MAL_FEEDBACK_OBSERVE_MISS(ic, mal_feedback_receiver(object), ic->key, false);
     if (object != nullptr) {
         if (mal_vm_object_try_load_static(object, ic, out)) {
             MAL_PERF_COUNT(known_own_slot_load_hits);
@@ -7727,7 +7727,7 @@ bool mal_vm_probe_named_read_miss(
     MalVm *vm, MalValue receiver, i32 string_index, MalInlineCache *ic, MalValue *out
 ) {
     MalValue key_value = mal_value_from_string(vm->string_constant_atoms[string_index]);
-    MAL_FEEDBACK_OBSERVE_MISS(ic, mal_feedback_object(receiver), key_value, false);
+    MAL_FEEDBACK_OBSERVE_MISS(ic, receiver, key_value, false);
     MalKey key = mal_key_from_value(key_value);
     MalObject *object = mal_value_to_object(receiver);
     for (u32 depth = 0; depth < 8; depth++) {
@@ -8098,7 +8098,7 @@ bool mal_vm_probe_accessor_read_miss(
     MalValue *out
 ) {
     // An accessor probe never reads an own data property, so only its row has a mode.
-    MAL_FEEDBACK_OBSERVE_MISS(ic, mal_feedback_object(receiver), MAL_VALUE_UNDEFINED, setter);
+    MAL_FEEDBACK_OBSERVE_MISS(ic, receiver, MAL_VALUE_UNDEFINED, setter);
     u8 mode = setter ? MAL_IC_MODE_INHERITED_SETTER : MAL_IC_MODE_INHERITED_GETTER;
     // prim_kind is unused by accessor rows; a probe's row counts its refills there.
     u8 refills = ic->mode == mode ? (u8) (ic->prim_kind + 1) : 0;
@@ -8623,7 +8623,7 @@ MalValue MAL_PROFILE_PROPERTY_LOAD_HELPER(mal_vm_op_load_property_ic)(
     MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
     MAL_PROFILE_PROPERTY_LOAD_SITE
 ) {
-    MAL_FEEDBACK_OBSERVE_MISS(ic, mal_feedback_object(object_value), key_value, false);
+    MAL_FEEDBACK_OBSERVE_MISS(ic, object_value, key_value, false);
     // The index parse takes an out-parameter, and so a frame; a name whose rejection is
     // memoized goes straight to the stub.
     if (mal_value_is_string(key_value) &&
@@ -8705,8 +8705,7 @@ __attribute__((noinline)) MalValue MAL_PROFILE_PROPERTY_LOAD_HELPER(mal_vm_op_lo
     MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic MAL_PROFILE_PROPERTY_LOAD_SITE
 ) {
     MAL_FEEDBACK_OBSERVE_MISS(
-        ic, mal_feedback_object(object_value),
-        mal_value_from_string(vm->string_constant_atoms[atom]), false);
+        ic, object_value, mal_value_from_string(vm->string_constant_atoms[atom]), false);
     // Accessor sites such as `debug.enabled` hit here on every read, so their row skips
     // the general path's frame and its rooted operand buffer. A getter row never holds
     // for a nullish receiver, whose TypeError the general path raises. A held row has
@@ -8753,7 +8752,7 @@ static __attribute__((noinline)) MalValue mal_vm_op_load_property_ic_static_miss
     MalValue name_value = mal_value_from_string(name);
     MalValue result;
     if (mal_vm_builtin_chain_missing(vm, object_value, name_value)) {
-        MAL_FEEDBACK_OBSERVE_SHARED(ic, mal_feedback_object(object_value), MAL_IC_MODE_MISSING);
+        MAL_FEEDBACK_OBSERVE_SHARED(ic, object_value, MAL_IC_MODE_MISSING, MAL_VALUE_UNDEFINED);
         MAL_PERF_COUNT(ic_load_builtin_missing_hits);
         return MAL_VALUE_UNDEFINED;
     }
@@ -9003,7 +9002,7 @@ static void mal_vm_op_store_object_property_ic(
 void mal_vm_op_store_property_ic(
     MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic
 ) {
-    MAL_FEEDBACK_OBSERVE_MISS(ic, mal_feedback_object(object_value), key_value, true);
+    MAL_FEEDBACK_OBSERVE_MISS(ic, object_value, key_value, true);
     // Setter rows hit before key conversion; the caller has rooted its operands.
     if (ic->mode == MAL_IC_MODE_INHERITED_SETTER &&
         mal_vm_inherited_accessor_row_holds(object_value, key_value, ic)) {

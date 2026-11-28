@@ -3502,6 +3502,9 @@ void mal_vm_interpret(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_to_property_key(frame, instruction));
                 break;
             MAL_VM_CASE(CALL_SPREAD) {
+                MAL_FEEDBACK_OBSERVE_CALL(
+                    instruction, mal_op_value_operand(frame, instruction->as.call_spread.callee),
+                    mal_op_value_operand(frame, instruction->as.call_spread.this_value));
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call_spread(frame, instruction));
                 break;
             }
@@ -3514,6 +3517,10 @@ void mal_vm_interpret(
                 break;
             }
             MAL_VM_CASE(CALL_SPREAD_ITERABLE) {
+                MAL_FEEDBACK_OBSERVE_CALL(
+                    instruction,
+                    mal_op_value_operand(frame, instruction->as.call_spread_iterable.callee),
+                    mal_op_value_operand(frame, instruction->as.call_spread_iterable.this_value));
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(
                     mal_op_call_spread_iterable(frame, instruction));
                 break;
@@ -3973,6 +3980,11 @@ void mal_vm_interpret(
                 break;
 
             MAL_VM_CASE(CALL) {
+                // Before the guarded builtin paths, so a builtin called through a
+                // variable is recorded too.
+                MAL_FEEDBACK_OBSERVE_CALL(
+                    instruction, mal_op_value_operand(frame, instruction->as.call.callee),
+                    mal_op_value_operand(frame, instruction->as.call.this_value));
                 const i32 *call_data = frame->function->instruction_data +
                     instruction->as.call.data_offset;
                 i32 guarded_tag = call_data[3 + call_data[2] + call_data[0]];

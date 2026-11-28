@@ -75,6 +75,40 @@ for (let index = 0; index < 30; index++) {
 console.log(out.join(","));
 `,
 	},
+	{
+		name: "call targets and primitive receivers",
+		source: `function Layer(path) {
+	this.path = path;
+}
+Layer.prototype.match = function (path) {
+	return this.path === path;
+};
+function matchAll(layers, path) {
+	let count = 0;
+	for (const layer of layers) if (layer.match(path)) count++;
+	return count;
+}
+function run(callback, value) {
+	return callback(value);
+}
+const app = function () {};
+app.handle = function (value) {
+	return value + 1;
+};
+const max = Math.max;
+const steps = [(v) => v + 1, (v) => v * 2, (v) => v - 3, (v) => v % 5, (v) => -v];
+const layers = [new Layer("/a"), new Layer("/b")];
+const out = [];
+for (let index = 0; index < 30; index++) {
+	out.push(matchAll(layers, index % 2 ? "/a" : "/b"));
+	out.push(run(steps[index % steps.length], index) + run((v) => v + index, 1));
+	out.push(max(index, 7) + app.handle(index));
+	out.push("a-b-c".indexOf("b") + String(index).padStart(3, "0").length);
+	out.push(run(index % 2 ? Math.abs : Math.sign, -index));
+}
+console.log(out.join(","));
+`,
+	},
 ];
 
 const FOREIGN_SOURCE = `function area(rect) {
@@ -182,9 +216,40 @@ const MODES = [
 	"missing",
 	"watched",
 ];
-const KINDS = [undefined, "function", "array", "error"];
+const KINDS = [undefined, "function", "array", "error", "string", "number"];
+const TARGET_POOL = [
+	"builtin:Math.max",
+	"builtin:String.prototype.indexOf",
+	"builtin:Array.prototype.push",
+	`fn:${"a".repeat(64)}:${"b".repeat(64)}`,
+];
 
-function randomValue(next: () => number): SiteValue {
+const isCallSite = (siteKey: string) => siteKey.includes(":call:");
+
+/** 1 to 4 target names from the pool and `known`, or megamorphic targets. */
+function randomTargets(next: () => number, known: ReadonlyArray<string>): SiteValue {
+	if (next() < 0.2) return { targetsMegamorphic: true };
+	const pool = [...TARGET_POOL, ...known];
+	const names = new Set(
+		Array.from(
+			{ length: 1 + Math.floor(next() * 4) },
+			() => pool[Math.floor(next() * pool.length)]!,
+		),
+	);
+	return { targets: [...names].sort() };
+}
+
+function randomValue(
+	next: () => number,
+	siteKey: string,
+	known: ReadonlyArray<string>,
+): SiteValue {
+	if (isCallSite(siteKey)) return randomTargets(next, known);
+	const targets = next() < 0.3 ? randomTargets(next, known) : {};
+	return { ...randomPropertyValue(next), ...targets };
+}
+
+function randomPropertyValue(next: () => number): SiteValue {
 	const pick = <T>(values: ReadonlyArray<T>): T =>
 		values[Math.floor(next() * values.length)]!;
 	const shapes = () =>
@@ -209,13 +274,42 @@ function randomValue(next: () => number): SiteValue {
 	}
 }
 
-function siteValues(file: FeedbackFile): Array<SiteValue> {
-	return Object.values(file.functions).flatMap((fn) =>
-		Object.values(fn.sites).map((entries) => {
+/** Each site's first value, property and call sites apart: neither op accepts the other's. */
+function siteValues(file: FeedbackFile): {
+	property: Array<SiteValue>;
+	call: Array<SiteValue>;
+} {
+	const values = { property: [] as Array<SiteValue>, call: [] as Array<SiteValue> };
+	for (const fn of Object.values(file.functions))
+		for (const [siteKey, entries] of Object.entries(fn.sites)) {
 			const { units: _units, ...value } = entries[0]!;
-			return value;
-		}),
-	);
+			values[isCallSite(siteKey) ? "call" : "property"].push(value);
+		}
+	return values;
+}
+
+function targetNames(file: FeedbackFile): Array<string> {
+	return [
+		...new Set(
+			Object.values(file.functions).flatMap((fn) =>
+				Object.values(fn.sites).flatMap((entries) =>
+					entries.flatMap((entry) => (entry.targets as Array<string> | undefined) ?? []),
+				),
+			),
+		),
+	];
+}
+
+/** The `index`th value of the pool for the site's op, wrapping. */
+function pooled(
+	pools: { property: Array<SiteValue>; call: Array<SiteValue> },
+	index: number,
+	siteKey: string,
+): SiteValue {
+	const pool = pools[isCallSite(siteKey) ? "call" : "property"];
+	if (pool.length === 0)
+		return isCallSite(siteKey) ? { targetsMegamorphic: true } : { megamorphic: true };
+	return pool[index % pool.length]!;
 }
 
 /** `file` with every site's entries replaced by `valueFor(site index)`, units kept. */
@@ -256,13 +350,13 @@ describe("production builds ignore lying feedback", { timeout: 900_000 }, () => 
 	});
 
 	const foreign = (() => {
-		let values: Array<SiteValue> | undefined;
+		let values: ReturnType<typeof siteValues> | undefined;
 		return () => {
 			if (values !== undefined) return values;
 			const directory = project("foreign.js", FOREIGN_SOURCE);
 			directories.push(directory);
 			values = siteValues(record(directory, "foreign.js"));
-			expect(values.length).toBeGreaterThan(0);
+			expect(values.property.length).toBeGreaterThan(0);
 			return values;
 		};
 	})();
@@ -272,19 +366,27 @@ describe("production builds ignore lying feedback", { timeout: 900_000 }, () => 
 		directories.push(directory);
 		const recorded = record(directory, "main.js");
 		const values = siteValues(recorded);
-		expect(values.length).toBeGreaterThan(0);
+		expect(values.property.length).toBeGreaterThan(0);
+		const known = targetNames(recorded);
 		const expected = buildAndRun(directory, "main.js");
 		expect(buildAndRun(directory, "main.js", recorded)).toBe(expected);
 
 		const variants: Array<[string, FeedbackFile]> = [
 			[
 				"inverted",
-				withSiteValues(recorded, (index) => values[(index + 1) % values.length]!),
+				withSiteValues(recorded, (index, siteKey) => pooled(values, index + 1, siteKey)),
 			],
-			["megamorphic", withSiteValues(recorded, () => ({ megamorphic: true }))],
+			[
+				"megamorphic",
+				withSiteValues(recorded, (_index, siteKey) =>
+					isCallSite(siteKey)
+						? { targetsMegamorphic: true }
+						: { megamorphic: true, targetsMegamorphic: true },
+				),
+			],
 			[
 				"foreign",
-				withSiteValues(recorded, (index) => foreign()[index % foreign().length]!),
+				withSiteValues(recorded, (index, siteKey) => pooled(foreign(), index, siteKey)),
 			],
 		];
 		for (const seed of [1, 2, 3]) {
@@ -293,13 +395,14 @@ describe("production builds ignore lying feedback", { timeout: 900_000 }, () => 
 				`random seed ${seed}`,
 				withSiteValues(
 					recorded,
-					() => randomValue(next),
+					(_index, siteKey) => randomValue(next, siteKey, known),
 					() =>
 						Object.fromEntries(
-							Array.from({ length: 2 }, () => [
-								`${Math.floor(next() * 400)}:${next() < 0.5 ? "get" : "set"}:${KEY_POOL[Math.floor(next() * KEY_POOL.length)]}`,
-								randomValue(next),
-							]),
+							Array.from({ length: 3 }, () => {
+								const op = ["get", "set", "call"][Math.floor(next() * 3)]!;
+								const siteKey = `${Math.floor(next() * 400)}:${op}:${op === "call" ? "*" : KEY_POOL[Math.floor(next() * KEY_POOL.length)]}`;
+								return [siteKey, randomValue(next, siteKey, known)];
+							}),
 						),
 				),
 			]);

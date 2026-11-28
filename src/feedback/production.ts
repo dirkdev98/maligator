@@ -16,12 +16,18 @@ import {
 	hashCanonicalProfileJson,
 	SourceProfileIdentities,
 } from "../source-profile-identity.ts";
-import type { FeedbackShape, FeedbackSiteValue } from "./dump.ts";
-import { combineSiteValues, FEEDBACK_FORMAT } from "./feedback-file.ts";
+import type { FeedbackShape, FeedbackSiteValue, FeedbackTargets } from "./dump.ts";
+import {
+	combineSiteValues,
+	FEEDBACK_FORMAT,
+	feedbackPropertyPart,
+} from "./feedback-file.ts";
 import { feedbackModuleKey } from "./project.ts";
 
 const MAX_SHAPES = 4;
+const MAX_TARGETS = 4;
 const SHA256 = /^[0-9a-f]{64}$/;
+const TARGET = /^(?:builtin:.+|fn:[0-9a-f]{64}:[0-9a-f]{64})$/s;
 const SITE_KEY = /^(0|[1-9]\d*):([a-z][a-z-]*):(.+)$/s;
 const FLAGS = /^w?e?c?a?$/;
 // Ops a production build attaches; recorded ops it can't use yet stay out of the
@@ -76,7 +82,58 @@ function readShapes(
 	return value.map((shape, index) => readShape(shape, `${location}[${index}]`, fail));
 }
 
+function readTargets(
+	entry: Record<string, unknown>,
+	location: string,
+	fail: Reader,
+): FeedbackTargets {
+	if (entry.targetsMegamorphic !== undefined) {
+		if (entry.targetsMegamorphic !== true) fail(location, "targetsMegamorphic is true");
+		if (entry.targets !== undefined)
+			fail(location, "an entry holds targets or targetsMegamorphic, not both");
+		return { targetsMegamorphic: true };
+	}
+	const targets = entry.targets;
+	if (targets === undefined) return {};
+	if (
+		!Array.isArray(targets) ||
+		targets.length === 0 ||
+		targets.length > MAX_TARGETS ||
+		!targets.every((name) => typeof name === "string" && TARGET.test(name))
+	)
+		fail(
+			`${location}.targets`,
+			`lists 1 to ${MAX_TARGETS} builtin:<id> or fn:<origin>:<revision> names`,
+		);
+	return { targets: [...new Set(targets as Array<string>)].sort() };
+}
+
+/** A `call` site's entry: the callees alone. */
+function readCallValue(
+	entry: Record<string, unknown>,
+	location: string,
+	fail: Reader,
+): FeedbackSiteValue {
+	for (const field of ["shapes", "mode", "kind", "megamorphic", "dictionary"])
+		if (entry[field] !== undefined) fail(location, `a call entry has no ${field}`);
+	const targets = readTargets(entry, location, fail);
+	if (targets.targets === undefined && targets.targetsMegamorphic === undefined)
+		fail(location, "a call entry holds targets or targetsMegamorphic");
+	return targets;
+}
+
 function readValue(
+	entry: Record<string, unknown>,
+	location: string,
+	fail: Reader,
+): FeedbackSiteValue {
+	return {
+		...readPropertyValue(entry, location, fail),
+		...readTargets(entry, location, fail),
+	};
+}
+
+function readPropertyValue(
 	entry: Record<string, unknown>,
 	location: string,
 	fail: Reader,
@@ -105,11 +162,19 @@ function readValue(
 	}
 	if (entry.shapes === undefined)
 		fail(location, "an entry holds shapes, a mode, megamorphic or dictionary");
-	return { shapes: readShapes(entry.shapes, `${location}.shapes`, fail), ...kindPart };
+	return {
+		shapes: readShapes(entry.shapes, `${location}.shapes`, fail),
+		...kindPart,
+	};
 }
 
-/** Normalized for hashing: shape lists sorted as the writer sorts them. */
-function canonicalValue(value: FeedbackSiteValue): FeedbackSiteValue {
+/**
+ * Normalized for hashing: shape lists sorted as the writer sorts them, and only
+ * the receiver part, which a build applies; targets wait for a consumer, so
+ * recording them changes no build identity.
+ */
+function canonicalValue(site: FeedbackSiteValue): FeedbackSiteValue {
+	const value = feedbackPropertyPart(site)!;
 	if (!("shapes" in value) || value.shapes === undefined) return value;
 	const shapes = value.shapes
 		.map((shape) => ({ shape, text: JSON.stringify(shape) }))
@@ -249,7 +314,10 @@ export class ProductionFeedback implements CoreFeedbackSource {
 							fail(`${entryAt}.units`, `unit ${unit} appears twice at this site`);
 						seen.add(unit);
 					}
-					const value = readValue(entry, entryAt, fail);
+					const value =
+						parts[2] === "call"
+							? readCallValue(entry, entryAt, fail)
+							: readValue(entry, entryAt, fail);
 					combined = combined === undefined ? value : combineSiteValues(combined, value);
 				}
 				if (APPLIED_OPS.has(parts[2]!)) sites.set(siteKey, canonicalValue(combined!));

@@ -7,6 +7,7 @@
 
 typedef struct MalVm MalVm;
 struct MalInlineCache;
+struct MalInstruction;
 struct MalObject;
 
 /**
@@ -16,20 +17,28 @@ struct MalObject;
  *
  * Runtimes compiled with the development API, which run development images,
  * also keep an observation history per site: every receiver an inline cache
- * miss, slot-key hit or shared inherited row serves, and every state a row held
- * before a miss or an invalidation replaced it. Other runtimes compile none of
- * it, and read only the rows as they are at the end.
+ * miss, slot-key hit or shared inherited row serves, every state a row held
+ * before a miss or an invalidation replaced it, the functions those loads
+ * produced, and the callees of the interpreter's plain calls. Other runtimes
+ * compile none of it, and read only the rows as they are at the end.
  *
  * The dump is a little-endian binary file, translated by the CLI's
  * `src/feedback/` module:
- *   "MALFDB02", u32 version (2), u32 vm function count, u32 record count,
+ *   "MALFDB03", u32 version (3), u32 vm function count, u32 known primordial
+ *   count, u32 record count,
  *   per record: i32 function index, u32 property IC count, u32 site count,
  *   per site: u32 IC index, u8 flags (1 megamorphic, 2 dictionary, 4 mixed or
  *   unnamed receiver kinds), u8 kind name length and its ASCII name (empty for
- *   ordinary objects), u8 mode count and per mode u8 name length and its ASCII
- *   name ("own" for own data slots), u8 shape count and per shape u32 key count,
- *   per key u8 attributes (1 writable, 2 enumerable, 4 configurable, 8 accessor),
- *   u32 byte length and its UTF-8 bytes, in slot order.
+ *   ordinary objects), u8 primitive kind name length and its ASCII name (empty
+ *   for none), u8 mode count and per mode u8 name length and its ASCII name
+ *   ("own" for own data slots), u8 shape count and per shape u32 key count, per
+ *   key u8 attributes (1 writable, 2 enumerable, 4 configurable, 8 accessor),
+ *   u32 byte length and its UTF-8 bytes, in slot order, then the site's targets;
+ *   then u32 call site count, per call site: u32 function index, u32 source
+ *   position id of the call instruction, then its targets.
+ *   Targets: u8 flags (1 megamorphic: a function without a portable name, or
+ *   more than four), u8 count, per target u8 tag and u32 index: tag 1 is a
+ *   source function's VM function index, tag 2 a known primordial node.
  */
 void mal_feedback_init(MalVm *vm);
 
@@ -56,29 +65,39 @@ extern _Atomic(MalFeedbackHistory *) mal_feedback_history;
 bool mal_feedback_recording_thread(void);
 
 /**
- * A miss at `ic` loading or storing `key` on `object`, null for a primitive
- * receiver: records the receiver, whether `key` is its own data property, and
- * the state the row holds now, which the miss may replace. Some receivers, such
- * as functions, are never cached in the row, so their own accesses are told here.
+ * A miss at `ic` loading or storing `key` on `receiver`: records the receiver,
+ * whether `key` is its own data property, the function a load finds, and the
+ * state the row holds now, which the miss may replace. Some receivers, such as
+ * functions, are never cached in the row, so their own accesses are told here.
  */
 void mal_feedback_observe_miss(
     MalFeedbackHistory *history, const struct MalInlineCache *ic,
-    const struct MalObject *object, MalValue key, bool store);
+    MalValue receiver, MalValue key, bool store);
 
-/** A hit for `object` that `ic` serves without holding its shape. */
+/** A hit for `object` that `ic` serves without holding its shape, loading `value`. */
 void mal_feedback_observe_receiver(
-    MalFeedbackHistory *history, const struct MalInlineCache *ic, const struct MalObject *object);
+    MalFeedbackHistory *history, const struct MalInlineCache *ic,
+    const struct MalObject *object, MalValue value);
 
-/** `ic` answered `object`, null for a primitive, from VM-wide state in `mode`. */
+/** `ic` answered `receiver` with `value` from VM-wide state in `mode`. */
 void mal_feedback_observe_shared(
     MalFeedbackHistory *history, const struct MalInlineCache *ic,
-    const struct MalObject *object, u8 mode);
+    MalValue receiver, u8 mode, MalValue value);
 
 /** The state `ic` holds before it is cleared. */
 void mal_feedback_observe_row(MalFeedbackHistory *history, const struct MalInlineCache *ic);
 
 /** `ic` was just seeded by the compiler's candidates, which no access observed yet. */
 void mal_feedback_observe_seed(MalFeedbackHistory *history, const struct MalInlineCache *ic);
+
+/**
+ * The interpreter's `instruction` calls `callee` with `this_value`. Only plain
+ * calls, which pass undefined or the global object, are recorded: a method
+ * call's callee is the function its property site loaded, recorded there.
+ */
+void mal_feedback_observe_call(
+    MalFeedbackHistory *history, const struct MalInstruction *instruction,
+    MalValue callee, MalValue this_value);
 
 static inline MalFeedbackHistory *mal_feedback_recording(void) {
     MalFeedbackHistory *history =
@@ -87,23 +106,25 @@ static inline MalFeedbackHistory *mal_feedback_recording(void) {
         ? history : nullptr;
 }
 
-static inline const struct MalObject *mal_feedback_object(MalValue value) {
-    return mal_value_is_object(value) ? (const struct MalObject *) mal_value_to_heap(value) : nullptr;
+static inline MalValue mal_feedback_receiver(const struct MalObject *object) {
+    return object == nullptr
+        ? MAL_VALUE_UNDEFINED : mal_value_from_heap((MalHeapHeader *) object);
 }
 
-#define MAL_FEEDBACK_OBSERVE_MISS(ic, object, key, store) do { \
+#define MAL_FEEDBACK_OBSERVE_MISS(ic, receiver, key, store) do { \
     MalFeedbackHistory *mal_feedback_ = mal_feedback_recording(); \
     if (mal_feedback_ != nullptr) \
-        mal_feedback_observe_miss(mal_feedback_, (ic), (object), (key), (store)); \
+        mal_feedback_observe_miss(mal_feedback_, (ic), (receiver), (key), (store)); \
 } while (0)
-#define MAL_FEEDBACK_OBSERVE_RECEIVER(ic, object) do { \
-    MalFeedbackHistory *mal_feedback_ = mal_feedback_recording(); \
-    if (mal_feedback_ != nullptr) mal_feedback_observe_receiver(mal_feedback_, (ic), (object)); \
-} while (0)
-#define MAL_FEEDBACK_OBSERVE_SHARED(ic, object, mode) do { \
+#define MAL_FEEDBACK_OBSERVE_RECEIVER(ic, object, value) do { \
     MalFeedbackHistory *mal_feedback_ = mal_feedback_recording(); \
     if (mal_feedback_ != nullptr) \
-        mal_feedback_observe_shared(mal_feedback_, (ic), (object), (mode)); \
+        mal_feedback_observe_receiver(mal_feedback_, (ic), (object), (value)); \
+} while (0)
+#define MAL_FEEDBACK_OBSERVE_SHARED(ic, receiver, mode, value) do { \
+    MalFeedbackHistory *mal_feedback_ = mal_feedback_recording(); \
+    if (mal_feedback_ != nullptr) \
+        mal_feedback_observe_shared(mal_feedback_, (ic), (receiver), (mode), (value)); \
 } while (0)
 #define MAL_FEEDBACK_OBSERVE_ROW(ic) do { \
     MalFeedbackHistory *mal_feedback_ = mal_feedback_recording(); \
@@ -113,10 +134,16 @@ static inline const struct MalObject *mal_feedback_object(MalValue value) {
     MalFeedbackHistory *mal_feedback_ = mal_feedback_recording(); \
     if (mal_feedback_ != nullptr) mal_feedback_observe_seed(mal_feedback_, (ic)); \
 } while (0)
+#define MAL_FEEDBACK_OBSERVE_CALL(instruction, callee, this_value) do { \
+    MalFeedbackHistory *mal_feedback_ = mal_feedback_recording(); \
+    if (mal_feedback_ != nullptr) \
+        mal_feedback_observe_call(mal_feedback_, (instruction), (callee), (this_value)); \
+} while (0)
 #else
-#define MAL_FEEDBACK_OBSERVE_MISS(ic, object, key, store) ((void) 0)
-#define MAL_FEEDBACK_OBSERVE_RECEIVER(ic, object) ((void) 0)
-#define MAL_FEEDBACK_OBSERVE_SHARED(ic, object, mode) ((void) 0)
+#define MAL_FEEDBACK_OBSERVE_MISS(ic, receiver, key, store) ((void) 0)
+#define MAL_FEEDBACK_OBSERVE_RECEIVER(ic, object, value) ((void) 0)
+#define MAL_FEEDBACK_OBSERVE_SHARED(ic, receiver, mode, value) ((void) 0)
 #define MAL_FEEDBACK_OBSERVE_ROW(ic) ((void) 0)
 #define MAL_FEEDBACK_OBSERVE_SEED(ic) ((void) 0)
+#define MAL_FEEDBACK_OBSERVE_CALL(instruction, callee, this_value) ((void) 0)
 #endif

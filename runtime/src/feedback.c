@@ -9,7 +9,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "function_object.h"
 #include "gc.h"
+#include "heap_string.h"
+#include "intern_store.h"
+#include "object_ops.h"
 #include "shape.h"
 #include "utf8.h"
 #include "vm.h"
@@ -22,9 +26,37 @@ enum {
 };
 
 #define MAL_FEEDBACK_SHAPE_LIMIT 4
+#define MAL_FEEDBACK_TARGET_LIMIT 4
 #define MAL_FEEDBACK_NO_KIND UINT8_MAX
 
+enum {
+    MAL_FEEDBACK_TARGET_SOURCE = 1,
+    MAL_FEEDBACK_TARGET_PRIMORDIAL = 2,
+};
+
 static_assert(MAL_HEAP_TYPE_COUNT < MAL_FEEDBACK_NO_KIND, "heap types outgrew the kind byte");
+static_assert(MAL_PRIM_KIND_BIGINT < 8, "primitive kinds outgrew the kind mask");
+
+/**
+ * A function a site's loads produced or its calls called, compared by identity:
+ * a source function by its VM function index, and a native function by its cell
+ * and callback, which the dump names by finding the cell among the known
+ * primordials. The collector never moves cells; the callback keeps a cell freed
+ * and reused by another native function from taking the earlier one's name.
+ */
+typedef struct MalFeedbackTarget {
+    // The VM function index of a source function, or -1 for a native one.
+    i32 function_index;
+    const void *native;
+    MalNativeFunctionCallback callback;
+} MalFeedbackTarget;
+
+typedef struct MalFeedbackTargets {
+    MalFeedbackTarget items[MAL_FEEDBACK_TARGET_LIMIT];
+    u8 count;
+    // More than four targets, or one without a portable name.
+    bool megamorphic;
+} MalFeedbackTargets;
 
 /**
  * What one property site observed. Shapes are immortal for their heap's lifetime
@@ -32,15 +64,20 @@ static_assert(MAL_HEAP_TYPE_COUNT < MAL_FEEDBACK_NO_KIND, "heap types outgrew th
  * nameable until the dump, which runs before the heap is freed.
  */
 typedef struct MalFeedbackSite {
-    const MalInlineCache *ic;
+    // The site's inline cache row, or the instruction of a call site.
+    const void *key;
     const MalShape *shapes[MAL_FEEDBACK_SHAPE_LIMIT];
     // Inline cache modes the row held, one bit per mode.
     u64 modes;
+    MalFeedbackTargets targets;
     u8 shape_count;
     // Heap type of the object receivers, or MAL_FEEDBACK_NO_KIND before the first.
     u8 kind;
+    // Primitive receiver kinds, one bit per MAL_PRIM_KIND_*.
+    u8 primitive_kinds;
     u8 flags;
     bool observed;
+    bool call;
 #if MAL_FEEDBACK_HISTORY
     // The row still holds the compiler's seed, captured here, which no access observed.
     bool seeded;
@@ -232,9 +269,72 @@ static MalInlineCache *mal_feedback_seeded_rows(MalVm *vm, const MalFunction *fu
     return rows;
 }
 
-static MalFeedbackSite mal_feedback_site_init(const MalInlineCache *ic) {
-    return (MalFeedbackSite) {.ic = ic, .kind = MAL_FEEDBACK_NO_KIND};
+static MalFeedbackSite mal_feedback_site_init(const void *key) {
+    return (MalFeedbackSite) {.key = key, .kind = MAL_FEEDBACK_NO_KIND};
 }
+
+#if MAL_FEEDBACK_HISTORY
+static void mal_feedback_note_target(MalFeedbackTargets *targets, MalValue value) {
+    if ((value & MAL_VALUE_CLASS_MASK) != MAL_VALUE_CALLABLE) {
+        // A callable proxy has no portable name; any other value is no function.
+        if (mal_value_is_callable(value)) targets->megamorphic = true;
+        return;
+    }
+    if (targets->megamorphic) return;
+    MalFeedbackTarget target = {.function_index = -1};
+    switch (mal_value_heap_type(value)) {
+        case MAL_HEAP_FUNCTION_OBJECT:
+            target.function_index =
+                mal_function_object_function_index(mal_value_to_function_object(value));
+            break;
+        case MAL_HEAP_NATIVE_FUNCTION_OBJECT: {
+            const MalNativeFunctionObject *native =
+                (const MalNativeFunctionObject *) mal_value_to_heap(value);
+            target.native = native;
+            target.callback = native->callback;
+            break;
+        }
+        default:
+            // Bound functions and host callables have no portable name.
+            targets->megamorphic = true;
+            return;
+    }
+    for (u8 index = 0; index < targets->count; index++) {
+        const MalFeedbackTarget *known = &targets->items[index];
+        if (known->function_index == target.function_index && known->native == target.native &&
+            known->callback == target.callback) {
+            return;
+        }
+    }
+    if (targets->count == MAL_FEEDBACK_TARGET_LIMIT) {
+        targets->megamorphic = true;
+        return;
+    }
+    targets->items[targets->count++] = target;
+}
+
+/**
+ * The function a value row caches, while the row still holds: a stale row's value
+ * may have been collected. A dependency-registered inherited row is cleared on any
+ * change to its chain; the others hold while no watched built-in object changed.
+ */
+static void mal_feedback_note_row_value(
+    MalFeedbackSite *site, const MalVm *vm, const MalInlineCache *ic
+) {
+    switch (ic->mode) {
+        case MAL_IC_MODE_INHERITED_VALUE:
+            if (ic->poly_count == 0 && !mal_vm_watched_row_current(vm, ic->watched_epoch)) return;
+            break;
+        case MAL_IC_MODE_PRIMITIVE_VALUE:
+        case MAL_IC_MODE_WATCHED_VALUE:
+            if (!mal_vm_watched_row_current(vm, ic->watched_epoch)) return;
+            break;
+        default:
+            return;
+    }
+    mal_feedback_note_target(&site->targets, ic->value);
+}
+#endif
 
 static void mal_feedback_note_shape(MalFeedbackSite *site, const MalShape *shape) {
     if (shape == nullptr || (site->flags & MAL_FEEDBACK_MEGAMORPHIC) != 0) return;
@@ -248,12 +348,27 @@ static void mal_feedback_note_shape(MalFeedbackSite *site, const MalShape *shape
     site->shapes[site->shape_count++] = shape;
 }
 
-/** Add a row's mode and, for own data slots, the receiver shapes it holds. */
-static void mal_feedback_note_state(MalFeedbackSite *site, const MalInlineCache *ic) {
+/**
+ * Add a row's mode, the primitive kind or function it caches and, for own data
+ * slots, the receiver shapes it holds.
+ */
+static void mal_feedback_note_state(
+    MalFeedbackSite *site, const MalVm *vm, const MalInlineCache *ic
+) {
     if (mal_feedback_row_empty(ic)) return;
     site->observed = true;
     site->modes |= (u64) 1 << ic->mode;
     if (ic->megamorphic) site->flags |= MAL_FEEDBACK_MEGAMORPHIC;
+    // Other rows reuse `prim_kind`, such as accessor probes counting refills.
+    if (ic->mode == MAL_IC_MODE_PRIMITIVE_VALUE && ic->prim_kind != 0)
+        site->primitive_kinds |= (u8) (1u << ic->prim_kind);
+    if (ic->mode == MAL_IC_MODE_STRING_LENGTH)
+        site->primitive_kinds |= (u8) (1u << MAL_PRIM_KIND_STRING);
+#if MAL_FEEDBACK_HISTORY
+    mal_feedback_note_row_value(site, vm, ic);
+#else
+    (void) vm;
+#endif
     if (ic->mode != MAL_IC_MODE_SHAPE || ic->prim_kind != 0) return;
     mal_feedback_note_shape(site, ic->shape);
     for (u8 index = 0; index < ic->poly_count && index < MAL_IC_POLY_EXTRA; index++) {
@@ -298,14 +413,196 @@ static const char *mal_feedback_kind_name(u8 type) {
     }
 }
 
+static const char *mal_feedback_primitive_kind_name(u8 kinds) {
+    switch (kinds) {
+        case 0: return "";
+        case 1u << MAL_PRIM_KIND_STRING: return "string";
+        case 1u << MAL_PRIM_KIND_NUMBER: return "number";
+        case 1u << MAL_PRIM_KIND_BOOLEAN: return "boolean";
+        case 1u << MAL_PRIM_KIND_SYMBOL: return "symbol";
+        case 1u << MAL_PRIM_KIND_BIGINT: return "bigint";
+        default: return nullptr;
+    }
+}
+
+/**
+ * Names native targets at the dump. Each known primordial node is resolved by
+ * reading the graph the way `mal_vm_load_primordial` does, but without its side
+ * effects: no lazy member is installed, no key interned and nothing thrown, so a
+ * node the program never materialized stays unresolved. A loaded target was
+ * materialized by the load that produced it.
+ */
+typedef struct MalFeedbackNames {
+    MalVm *vm;
+    MalValue *primordials;
+    u8 *resolved;
+    bool failed;
+} MalFeedbackNames;
+
+#if MAL_FEEDBACK_HISTORY
+enum {
+    MAL_FEEDBACK_PRIMORDIAL_KIND_MASK = 7,
+    MAL_FEEDBACK_PRIMORDIAL_SYMBOL_KEY = 8,
+    MAL_FEEDBACK_PRIMORDIAL_TARGET_SHIFT = 4,
+    MAL_FEEDBACK_PRIMORDIAL_KEY_SHIFT =
+        MAL_FEEDBACK_PRIMORDIAL_TARGET_SHIFT + MAL_KNOWN_PRIMORDIAL_TARGET_BITS,
+};
+
+static_assert(MAL_FEEDBACK_PRIMORDIAL_KEY_SHIFT + MAL_KNOWN_PRIMORDIAL_KEY_BITS == 32);
+
+// The packing of `mal_vm_load_primordial`'s table, which development runtimes repeat
+// here so that production runtimes carry no second copy.
+static const u32 mal_feedback_primordial_bindings[] = {
+#define MAL_KNOWN_PRIMORDIAL(index, kind, parent_or_intrinsic, key, symbol_key) \
+    [index] = ((u32) (key) << MAL_FEEDBACK_PRIMORDIAL_KEY_SHIFT) | \
+        ((u32) (parent_or_intrinsic) << MAL_FEEDBACK_PRIMORDIAL_TARGET_SHIFT) | \
+        ((symbol_key) ? MAL_FEEDBACK_PRIMORDIAL_SYMBOL_KEY : 0) | (kind),
+#include "generated/known_primordials.inc"
+#undef MAL_KNOWN_PRIMORDIAL
+};
+
+static const byte mal_feedback_primordial_keys[] = ""
+#define MAL_KNOWN_PRIMORDIAL_KEYS
+#include "generated/known_primordials.inc"
+#undef MAL_KNOWN_PRIMORDIAL_KEYS
+    ;
+
+static MalValue mal_feedback_primordial(MalFeedbackNames *names, i32 node);
+
+static bool mal_feedback_primordial_key(MalFeedbackNames *names, u32 binding, MalKey *key) {
+    u32 key_index = binding >> MAL_FEEDBACK_PRIMORDIAL_KEY_SHIFT;
+    if ((binding & MAL_FEEDBACK_PRIMORDIAL_SYMBOL_KEY) != 0) {
+        MalValue symbol = mal_feedback_primordial(names, (i32) key_index);
+        if (!mal_value_is_symbol(symbol)) return false;
+        *key = mal_key_from_value(symbol);
+        return true;
+    }
+    if (key_index >= sizeof(mal_feedback_primordial_keys)) return false;
+    // A name no atom spells is a property no object has.
+    const char *name = (const char *) &mal_feedback_primordial_keys[key_index];
+    MalString probe;
+    mal_string_init_external_latin1(&probe, (const u8 *) name, strlen(name));
+    MalString *atom = mal_atom_store_find(&names->vm->atoms, &probe);
+    if (atom == nullptr) return false;
+    *key = (MalKey) {.kind = MAL_KEY_STRING, .value = mal_value_from_string(atom)};
+    return true;
+}
+
+static MalValue mal_feedback_resolve_primordial(MalFeedbackNames *names, i32 node) {
+    u32 binding = mal_feedback_primordial_bindings[node];
+    u32 kind = binding & MAL_FEEDBACK_PRIMORDIAL_KIND_MASK;
+    u32 target = (binding >> MAL_FEEDBACK_PRIMORDIAL_TARGET_SHIFT) &
+        ((1u << MAL_KNOWN_PRIMORDIAL_TARGET_BITS) - 1);
+    if (kind == 0) return MAL_VALUE_EMPTY;
+    if (kind == 1) return target < MAL_INTRINSIC_COUNT ? names->vm->intrinsics[target] : MAL_VALUE_EMPTY;
+    MalValue parent = mal_feedback_primordial(names, (i32) target);
+    if (!mal_value_is_object(parent)) return MAL_VALUE_EMPTY;
+    const MalObject *object = mal_value_to_object(parent);
+    if (object->header.type == MAL_HEAP_PROXY_OBJECT) return MAL_VALUE_EMPTY;
+    if (kind == 2) {
+        const MalObject *prototype = mal_object_prototype(object);
+        return prototype == nullptr ? MAL_VALUE_NULL : mal_feedback_receiver(prototype);
+    }
+    MalKey key;
+    if (!mal_feedback_primordial_key(names, binding, &key)) return MAL_VALUE_EMPTY;
+    MalPropertyLookup own = mal_object_get_own(object, key);
+    if (!own.present) return MAL_VALUE_EMPTY;
+    bool accessor = (own.desc.flags & MAL_PROPERTY_ACCESSOR) != 0;
+    if (kind == 3) return accessor ? MAL_VALUE_EMPTY : own.desc.value;
+    if (!accessor) return MAL_VALUE_EMPTY;
+    return kind == 4 ? own.desc.getter : own.desc.setter;
+}
+
+// Graph edges point from a node to its parent, so the recursion is as deep as a path.
+static MalValue mal_feedback_primordial(MalFeedbackNames *names, i32 node) {
+    if (node < 0 || node >= MAL_KNOWN_PRIMORDIAL_COUNT) return MAL_VALUE_EMPTY;
+    if (names->resolved[node] == 2) return names->primordials[node];
+    // A cycle names nothing.
+    if (names->resolved[node] == 1) return MAL_VALUE_EMPTY;
+    names->resolved[node] = 1;
+    MalValue value = mal_feedback_resolve_primordial(names, node);
+    names->primordials[node] = value;
+    names->resolved[node] = 2;
+    return value;
+}
+
+/** The known primordial node holding `target`, or -1. */
+static i32 mal_feedback_primordial_node(MalFeedbackNames *names, const MalFeedbackTarget *target) {
+    if (names->failed) return -1;
+    if (names->primordials == nullptr) {
+        names->primordials = calloc(MAL_KNOWN_PRIMORDIAL_COUNT, sizeof(MalValue));
+        names->resolved = calloc(MAL_KNOWN_PRIMORDIAL_COUNT, 1);
+        if (names->primordials == nullptr || names->resolved == nullptr) {
+            names->failed = true;
+            return -1;
+        }
+        for (i32 node = 0; node < MAL_KNOWN_PRIMORDIAL_COUNT; node++) mal_feedback_primordial(names, node);
+    }
+    for (i32 node = 0; node < MAL_KNOWN_PRIMORDIAL_COUNT; node++) {
+        MalValue value = names->primordials[node];
+        if ((value & MAL_VALUE_CLASS_MASK) != MAL_VALUE_CALLABLE ||
+            mal_value_heap_type(value) != MAL_HEAP_NATIVE_FUNCTION_OBJECT) {
+            continue;
+        }
+        const MalNativeFunctionObject *native =
+            (const MalNativeFunctionObject *) mal_value_to_heap(value);
+        if (native == target->native && native->callback == target->callback) return node;
+    }
+    return -1;
+}
+#endif
+
+static void mal_feedback_write_targets(
+    MalFeedbackBuffer *buffer, MalFeedbackNames *names, const MalFeedbackTargets *targets
+) {
+    u8 tags[MAL_FEEDBACK_TARGET_LIMIT];
+    u32 indices[MAL_FEEDBACK_TARGET_LIMIT];
+    u8 count = 0;
+    bool megamorphic = targets->megamorphic;
+    for (u8 index = 0; !megamorphic && index < targets->count; index++) {
+        const MalFeedbackTarget *target = &targets->items[index];
+        if (target->function_index >= 0) {
+            tags[count] = MAL_FEEDBACK_TARGET_SOURCE;
+            indices[count++] = (u32) target->function_index;
+            continue;
+        }
+#if MAL_FEEDBACK_HISTORY
+        i32 node = mal_feedback_primordial_node(names, target);
+#else
+        (void) names;
+        i32 node = -1;
+#endif
+        if (node < 0) {
+            megamorphic = true;
+            break;
+        }
+        tags[count] = MAL_FEEDBACK_TARGET_PRIMORDIAL;
+        indices[count++] = (u32) node;
+    }
+    if (megamorphic) count = 0;
+    mal_feedback_u8(buffer, megamorphic ? MAL_FEEDBACK_MEGAMORPHIC : 0);
+    mal_feedback_u8(buffer, count);
+    for (u8 index = 0; index < count; index++) {
+        mal_feedback_u8(buffer, tags[index]);
+        mal_feedback_u32(buffer, indices[index]);
+    }
+}
+
 static void mal_feedback_write_site(
-    MalFeedbackBuffer *buffer, const MalFeedbackSite *site, i32 ic_index
+    MalFeedbackBuffer *buffer, MalFeedbackNames *names, const MalFeedbackSite *site, i32 ic_index
 ) {
     u8 flags = site->flags;
     const char *kind = mal_feedback_kind_name(site->kind);
     if (kind == nullptr) {
         flags |= MAL_FEEDBACK_MIXED_KINDS;
         kind = "";
+    }
+    const char *primitive_kind = mal_feedback_primitive_kind_name(site->primitive_kinds);
+    // Primitives of several kinds, or primitives and objects, share no receiver kind.
+    if (primitive_kind == nullptr ||
+        (site->primitive_kinds != 0 && site->kind != MAL_FEEDBACK_NO_KIND)) {
+        flags |= MAL_FEEDBACK_MIXED_KINDS;
+        primitive_kind = "";
     }
     const char *modes[64];
     u8 mode_count = 0;
@@ -329,12 +626,14 @@ static void mal_feedback_write_site(
     mal_feedback_u32(buffer, (u32) ic_index);
     mal_feedback_u8(buffer, flags);
     mal_feedback_write_text(buffer, kind);
+    mal_feedback_write_text(buffer, primitive_kind);
     mal_feedback_u8(buffer, mode_count);
     for (u8 index = 0; index < mode_count; index++) mal_feedback_write_text(buffer, modes[index]);
     mal_feedback_u8(buffer, site->shape_count);
     for (u8 index = 0; index < site->shape_count; index++) {
         mal_feedback_write_shape(buffer, site->shapes[index]);
     }
+    mal_feedback_write_targets(buffer, names, &site->targets);
 }
 
 #if MAL_FEEDBACK_HISTORY
@@ -373,10 +672,10 @@ bool mal_feedback_recording_thread(void) {
 #endif
 }
 
-static usize mal_feedback_slot(const MalFeedbackHistory *history, const MalInlineCache *ic) {
+static usize mal_feedback_slot(const MalFeedbackHistory *history, const void *key) {
     usize mask = history->capacity - 1;
-    usize index = (usize) (((u64) (uptr) ic * 0x9E3779B97F4A7C15ull) >> 32) & mask;
-    while (history->sites[index].ic != nullptr && history->sites[index].ic != ic) {
+    usize index = (usize) (((u64) (uptr) key * 0x9E3779B97F4A7C15ull) >> 32) & mask;
+    while (history->sites[index].key != nullptr && history->sites[index].key != key) {
         index = (index + 1) & mask;
     }
     return index;
@@ -386,11 +685,14 @@ static const MalFeedbackSite *mal_feedback_find(
     const MalFeedbackHistory *history, const MalInlineCache *ic
 ) {
     const MalFeedbackSite *site = &history->sites[mal_feedback_slot(history, ic)];
-    return site->ic == ic ? site : nullptr;
+    return site->key == ic ? site : nullptr;
 }
 
-/** The history entry of `ic`, created on first use; null only when memory runs out. */
-static MalFeedbackSite *mal_feedback_site(MalFeedbackHistory *history, const MalInlineCache *ic) {
+/**
+ * The history entry of an inline cache row or a call instruction, created on
+ * first use; null only when memory runs out.
+ */
+static MalFeedbackSite *mal_feedback_site(MalFeedbackHistory *history, const void *key) {
     if ((history->count + 1) * 2 > history->capacity) {
         usize capacity = history->capacity * 2;
         MalFeedbackSite *sites = calloc(capacity, sizeof(MalFeedbackSite));
@@ -400,14 +702,14 @@ static MalFeedbackSite *mal_feedback_site(MalFeedbackHistory *history, const Mal
         history->sites = sites;
         history->capacity = capacity;
         for (usize index = 0; index < previous_capacity; index++) {
-            if (previous[index].ic == nullptr) continue;
-            history->sites[mal_feedback_slot(history, previous[index].ic)] = previous[index];
+            if (previous[index].key == nullptr) continue;
+            history->sites[mal_feedback_slot(history, previous[index].key)] = previous[index];
         }
         free(previous);
     }
-    MalFeedbackSite *site = &history->sites[mal_feedback_slot(history, ic)];
-    if (site->ic == nullptr) {
-        *site = mal_feedback_site_init(ic);
+    MalFeedbackSite *site = &history->sites[mal_feedback_slot(history, key)];
+    if (site->key == nullptr) {
+        *site = mal_feedback_site_init(key);
         history->count++;
     }
     return site;
@@ -422,19 +724,62 @@ static void mal_feedback_note_row(MalFeedbackSite *site, const MalInlineCache *i
         }
         site->seeded = false;
     }
-    mal_feedback_note_state(site, ic);
+    mal_feedback_note_state(site, g_feedback_vm, ic);
+}
+
+static void mal_feedback_note_primitive(MalFeedbackSite *site, MalValue receiver) {
+    u8 kind = mal_vm_primitive_method_kind(receiver);
+    if (kind != 0) site->primitive_kinds |= (u8) (1u << kind);
+}
+
+/**
+ * The function a load of `key` from `receiver` finds, read without running code:
+ * a data property on an ordinary chain. An accessor, a proxy or a lazily installed
+ * builtin member the program has not touched yet answers nothing; the row the load
+ * then fills holds what it found.
+ */
+static void mal_feedback_note_loaded(MalFeedbackSite *site, MalValue receiver, MalValue key) {
+    MalKey property;
+    if (mal_value_is_string(key)) property = (MalKey) {.kind = MAL_KEY_STRING, .value = key};
+    else if (mal_value_is_symbol(key)) property = (MalKey) {.kind = MAL_KEY_SYMBOL, .value = key};
+    else return;
+    const MalObject *holder;
+    if (mal_value_is_object(receiver)) {
+        holder = mal_value_to_object(receiver);
+    } else {
+        u8 kind = mal_vm_primitive_method_kind(receiver);
+        if (kind == 0) return;
+        MalValue prototype = g_feedback_vm->intrinsics[mal_vm_primitive_method_proto_slot(kind)];
+        if (!mal_value_is_object(prototype)) return;
+        holder = mal_value_to_object(prototype);
+    }
+    for (; holder != nullptr; holder = mal_object_prototype(holder)) {
+        if (holder->header.type == MAL_HEAP_PROXY_OBJECT ||
+            holder->header.type == MAL_HEAP_MODULE_NAMESPACE_OBJECT) {
+            return;
+        }
+        MalPropertyLookup own = mal_object_get_own(holder, property);
+        if (!own.present) continue;
+        if ((own.desc.flags & MAL_PROPERTY_ACCESSOR) == 0)
+            mal_feedback_note_target(&site->targets, own.desc.value);
+        return;
+    }
 }
 
 void mal_feedback_observe_miss(
-    MalFeedbackHistory *history, const MalInlineCache *ic, const MalObject *object,
+    MalFeedbackHistory *history, const MalInlineCache *ic, MalValue receiver,
     MalValue key, bool store
 ) {
     MalFeedbackSite *site = mal_feedback_site(history, ic);
     if (site == nullptr) return;
     mal_feedback_note_row(site, ic);
     site->observed = true;
-    // A primitive receiver's mode names it fully.
-    if (object == nullptr) return;
+    if (!store) mal_feedback_note_loaded(site, receiver, key);
+    if (!mal_value_is_object(receiver)) {
+        mal_feedback_note_primitive(site, receiver);
+        return;
+    }
+    const MalObject *object = mal_value_to_object(receiver);
     mal_feedback_note_object(site, object);
     const MalShape *shape = object->shape;
     if (!mal_value_is_string(key) || mal_object_has_public_overflow(object) || shape == nullptr ||
@@ -451,20 +796,25 @@ void mal_feedback_observe_miss(
 }
 
 void mal_feedback_observe_receiver(
-    MalFeedbackHistory *history, const MalInlineCache *ic, const MalObject *object
+    MalFeedbackHistory *history, const MalInlineCache *ic, const MalObject *object, MalValue value
 ) {
     MalFeedbackSite *site = mal_feedback_site(history, ic);
-    if (site != nullptr) mal_feedback_note_object(site, object);
+    if (site == nullptr) return;
+    mal_feedback_note_object(site, object);
+    mal_feedback_note_target(&site->targets, value);
 }
 
 void mal_feedback_observe_shared(
-    MalFeedbackHistory *history, const MalInlineCache *ic, const MalObject *object, u8 mode
+    MalFeedbackHistory *history, const MalInlineCache *ic, MalValue receiver, u8 mode,
+    MalValue value
 ) {
     MalFeedbackSite *site = mal_feedback_site(history, ic);
     if (site == nullptr) return;
     site->observed = true;
     site->modes |= (u64) 1 << mode;
-    if (object != nullptr) mal_feedback_note_object(site, object);
+    mal_feedback_note_target(&site->targets, value);
+    if (mal_value_is_object(receiver)) mal_feedback_note_object(site, mal_value_to_object(receiver));
+    else mal_feedback_note_primitive(site, receiver);
 }
 
 void mal_feedback_observe_row(MalFeedbackHistory *history, const MalInlineCache *ic) {
@@ -482,21 +832,93 @@ void mal_feedback_observe_seed(MalFeedbackHistory *history, const MalInlineCache
     site->seed_key = ic->key;
     site->seed_poly_count = ic->poly_count;
 }
+
+void mal_feedback_observe_call(
+    MalFeedbackHistory *history, const MalInstruction *instruction, MalValue callee,
+    MalValue this_value
+) {
+    // Sloppy code may pass the global object it would bind anyway.
+    if (!mal_value_is_undefined(this_value) &&
+        this_value != g_feedback_vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]) {
+        return;
+    }
+    MalFeedbackSite *site = mal_feedback_site(history, instruction);
+    if (site == nullptr) return;
+    site->call = true;
+    site->observed = true;
+    mal_feedback_note_target(&site->targets, callee);
+}
+
+/**
+ * The function holding a call site's instruction and the instruction's source
+ * position id, false when no interpreted function holds it. Loading removes
+ * instructions, such as jumps to the next one, so the position, not the
+ * instruction index, matches the image the CLI reads.
+ */
+static bool mal_feedback_call_position(
+    const MalRuntimeImage *image, const MalInstruction *instruction, i32 *function_index,
+    i32 *position
+) {
+    for (i32 index = 0; index < image->function_count; index++) {
+        const MalFunction *function = &image->functions[index];
+        if (function->instructions == nullptr || function->compiled != nullptr ||
+            instruction < function->instructions ||
+            instruction >= function->instructions + function->instruction_count) {
+            continue;
+        }
+        i32 ip = (i32) (instruction - function->instructions);
+        *function_index = index;
+        *position = -1;
+        for (i32 entry = 0; entry < function->position_count; entry++) {
+            if (function->positions[entry].start_ip > ip) break;
+            *position = function->positions[entry].pos_id;
+        }
+        return *position >= 0;
+    }
+    return false;
+}
+
+static void mal_feedback_write_calls(
+    MalFeedbackBuffer *buffer, MalFeedbackNames *names, const MalFeedbackHistory *history,
+    const MalRuntimeImage *image
+) {
+    usize count_offset = buffer->length;
+    mal_feedback_u32(buffer, 0);
+    u32 count = 0;
+    for (usize slot = 0; history != nullptr && slot < history->capacity; slot++) {
+        const MalFeedbackSite *site = &history->sites[slot];
+        i32 function_index;
+        i32 position;
+        if (site->key == nullptr || !site->call ||
+            !mal_feedback_call_position(image, site->key, &function_index, &position)) {
+            continue;
+        }
+        mal_feedback_u32(buffer, (u32) function_index);
+        mal_feedback_u32(buffer, (u32) position);
+        mal_feedback_write_targets(buffer, names, &site->targets);
+        count++;
+    }
+    mal_feedback_patch_u32(buffer, count_offset, count);
+}
 #endif
 
-static void mal_feedback_serialize(MalVm *vm, MalFeedbackBuffer *buffer) {
+static void mal_feedback_serialize(MalVm *vm, MalFeedbackBuffer *buffer, MalFeedbackNames *names) {
     const MalRuntimeImage *image = vm->runtime_image;
-    mal_feedback_write(buffer, "MALFDB02", 8);
-    mal_feedback_u32(buffer, 2);
+    mal_feedback_write(buffer, "MALFDB03", 8);
+    mal_feedback_u32(buffer, 3);
     mal_feedback_u32(buffer, (u32) image->function_count);
+    mal_feedback_u32(buffer, MAL_KNOWN_PRIMORDIAL_COUNT);
     usize record_count_offset = buffer->length;
     mal_feedback_u32(buffer, 0);
     u32 record_count = 0;
-    if (vm->property_cache == nullptr) return;
 #if MAL_FEEDBACK_HISTORY
     const MalFeedbackHistory *history =
         atomic_load_explicit(&mal_feedback_history, memory_order_relaxed);
 #endif
+    if (vm->property_cache == nullptr) {
+        mal_feedback_u32(buffer, 0);
+        return;
+    }
     for (i32 function_index = 0; function_index < image->function_count; function_index++) {
         const MalPropertyCachePool *pool = &vm->property_cache[function_index];
         if (pool->sites == nullptr) continue;
@@ -519,9 +941,9 @@ static void mal_feedback_serialize(MalVm *vm, MalFeedbackBuffer *buffer) {
             // The history and the final row together: a row still equal to its seed
             // carries no runtime evidence.
             if (seeded == nullptr || !mal_feedback_rows_equal(ic, &seeded[ic_index]))
-                mal_feedback_note_state(&site, ic);
+                mal_feedback_note_state(&site, vm, ic);
             if (!site.observed) continue;
-            mal_feedback_write_site(buffer, &site, ic_index);
+            mal_feedback_write_site(buffer, names, &site, ic_index);
             site_count++;
         }
         free(seeded);
@@ -533,11 +955,19 @@ static void mal_feedback_serialize(MalVm *vm, MalFeedbackBuffer *buffer) {
         record_count++;
     }
     mal_feedback_patch_u32(buffer, record_count_offset, record_count);
+#if MAL_FEEDBACK_HISTORY
+    mal_feedback_write_calls(buffer, names, history, image);
+#else
+    mal_feedback_u32(buffer, 0);
+#endif
 }
 
 static void mal_feedback_publish(MalVm *vm, const char *path) {
     MalFeedbackBuffer buffer = {0};
-    mal_feedback_serialize(vm, &buffer);
+    MalFeedbackNames names = {.vm = vm};
+    mal_feedback_serialize(vm, &buffer, &names);
+    free(names.primordials);
+    free(names.resolved);
     usize path_length = strlen(path);
     char *temporary = malloc(path_length + sizeof(".partial"));
     FILE *file = nullptr;

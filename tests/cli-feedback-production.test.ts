@@ -6,6 +6,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { cleanTestEnvironment } from "../scripts/test-environment.ts";
 
 const cliEntry = resolve("src/index.ts");
+// Recording runs the development runner, which a cold checkout builds first.
+// Builds here stop at the generated C (`--print`), so none compiles a native
+// executable or the production runtime.
+const coldRunnerTimeoutMs = 300_000;
 const commandTimeoutMs = 180_000;
 
 const SITES_SOURCE = `class Point {
@@ -31,9 +35,12 @@ function lookup(table, key) {
 	return table[key];
 }
 const parse = (text) => JSON.parse(text);
+const steps = [(value) => value + 1, (value) => value * 2];
 let total = 0;
 for (let index = 0; index < 20; index++) {
 	const point = new Point(index, index + 1);
+	const step = steps[index % 2];
+	total += step(index);
 	total += readX(point) + readX(parse('{"x":2,"y":3}'));
 	setY(point, index);
 	total += Math.round(point.norm());
@@ -53,7 +60,10 @@ console.log(sum);
 `;
 
 interface FeedbackFile {
-	functions: Record<string, { sites: Record<string, unknown> }>;
+	functions: Record<
+		string,
+		{ sites: Record<string, Array<Record<string, unknown>>> } & Record<string, unknown>
+	>;
 }
 
 interface FeedbackCounters {
@@ -63,12 +73,12 @@ interface FeedbackCounters {
 	attachedAfterConstruction: number;
 }
 
-function invokeCli(cwd: string, args: ReadonlyArray<string>) {
+function invokeCli(cwd: string, args: ReadonlyArray<string>, timeout = commandTimeoutMs) {
 	return spawnSync(process.execPath, [cliEntry, ...args], {
 		cwd,
 		env: cleanTestEnvironment(),
 		encoding: "utf8",
-		timeout: commandTimeoutMs,
+		timeout,
 	});
 }
 
@@ -87,7 +97,13 @@ function project(sources: Record<string, string>): string {
 }
 
 function record(directory: string, entry: string): string {
-	succeed(invokeCli(directory, ["run", entry, "--feedback", "app.feedback.json"]));
+	succeed(
+		invokeCli(
+			directory,
+			["run", entry, "--feedback", "app.feedback.json"],
+			coldRunnerTimeoutMs,
+		),
+	);
 	return readFileSync(join(directory, "app.feedback.json"), "utf8");
 }
 
@@ -120,7 +136,7 @@ describe("maligator build --production --feedback", { timeout: 600_000 }, () => 
 		const directory = project({ "main.js": SITES_SOURCE });
 		directories.push(directory);
 		recorded = record(directory, "main.js");
-	});
+	}, coldRunnerTimeoutMs + 5000);
 
 	afterAll(() => {
 		for (const directory of directories)
@@ -145,6 +161,7 @@ describe("maligator build --production --feedback", { timeout: 600_000 }, () => 
 					"app.feedback.json",
 					"--core-report",
 					"counters",
+					"--print",
 				]),
 			),
 		);
@@ -172,6 +189,7 @@ describe("maligator build --production --feedback", { timeout: 600_000 }, () => 
 					"app.feedback.json",
 					"--core-report",
 					"counters",
+					"--print",
 				]),
 			),
 		);
@@ -195,6 +213,7 @@ describe("maligator build --production --feedback", { timeout: 600_000 }, () => 
 				"build",
 				"main.js",
 				"--production",
+				"--print",
 				"--verbose",
 				...feedback,
 			]),
@@ -229,12 +248,89 @@ describe("maligator build --production --feedback", { timeout: 600_000 }, () => 
 		expect(frontendCache(directory, [])).toBe("miss");
 	});
 
+	/** `file` without call sites and without the targets of its property sites. */
+	function withoutTargets(file: FeedbackFile): FeedbackFile {
+		return {
+			...file,
+			functions: Object.fromEntries(
+				Object.entries(file.functions).map(([origin, fn]) => [
+					origin,
+					{
+						...fn,
+						sites: Object.fromEntries(
+							Object.entries(fn.sites)
+								.filter(([siteKey]) => !siteKey.includes(":call:"))
+								.map(([siteKey, entries]) => [
+									siteKey,
+									entries.map(
+										({ targets: _targets, targetsMegamorphic: _mega, ...entry }) => entry,
+									),
+								]),
+						),
+					},
+				]),
+			),
+		};
+	}
+
+	it("generates the same C whether or not the file carries targets and call sites", () => {
+		expect(recorded).toMatch(/"targets"/);
+		expect(recorded).toMatch(/:call:\*"/);
+		const directory = projectWithFeedback(SITES_SOURCE, recorded);
+		const printed = () => {
+			const result = invokeCli(directory, [
+				"build",
+				"main.js",
+				"--production",
+				"--print",
+				"--feedback",
+				"app.feedback.json",
+			]);
+			succeed(result);
+			return result.stdout;
+		};
+		const withTargets = printed();
+		writeFileSync(
+			join(directory, "app.feedback.json"),
+			`${JSON.stringify(withoutTargets(JSON.parse(recorded) as FeedbackFile))}\n`,
+		);
+		expect(printed()).toBe(withTargets);
+	});
+
+	it("gives a file the build identity of the same file without targets and call sites", () => {
+		const directory = projectWithFeedback(SITES_SOURCE, recorded);
+		expect(frontendCache(directory, ["--feedback", "app.feedback.json"])).toBe("miss");
+		writeFileSync(
+			join(directory, "app.feedback.json"),
+			`${JSON.stringify(withoutTargets(JSON.parse(recorded) as FeedbackFile))}\n`,
+		);
+		expect(frontendCache(directory, ["--feedback", "app.feedback.json"])).toBe("hit");
+	});
+
+	it("rejects a call site entry that names no callee", () => {
+		const file = JSON.parse(recorded) as FeedbackFile;
+		const [origin, fn] = Object.entries(file.functions)[0]!;
+		fn.sites["0:call:*"] = [{ units: [0], shapes: [["x"]] }];
+		const directory = projectWithFeedback(SITES_SOURCE, JSON.stringify(file));
+		const result = invokeCli(directory, [
+			"build",
+			"main.js",
+			"--production",
+			"--print",
+			"--feedback",
+			"app.feedback.json",
+		]);
+		expect(result.status).toBe(1);
+		expect(`${result.stdout}${result.stderr}`).toContain(`${origin}.sites.0:call:*`);
+	});
+
 	it("rejects a file that is not in the feedback format", () => {
 		const directory = projectWithFeedback(SITES_SOURCE, '{ "format": "other" }\n');
 		const result = invokeCli(directory, [
 			"build",
 			"main.js",
 			"--production",
+			"--print",
 			"--feedback",
 			"app.feedback.json",
 		]);

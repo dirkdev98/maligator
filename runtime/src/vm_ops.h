@@ -1936,9 +1936,9 @@ static inline __attribute__((always_inline)) bool mal_vm_object_try_load_slot_ke
         !mal_shape_slot_holds_data_key(object->shape, slot, ic->key)) {
         return false;
     }
-    MAL_FEEDBACK_OBSERVE_RECEIVER(ic, object);
     MAL_PERF_COUNT(ic_load_slot_key_hits);
     *out = mal_object_field_load_shaped(object, slot);
+    MAL_FEEDBACK_OBSERVE_RECEIVER(ic, object, *out);
     return true;
 }
 
@@ -2449,13 +2449,13 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         bool primary = object->shape == ic->shape;
         if (primary || (ic->prim_kind == 0 &&
             mal_shape_slot_holds_data_key(object->shape, ic->slot, ic->key))) {
+            *out = mal_object_field_load_shaped(object, ic->slot);
             if (primary) {
                 mal_perf_ic_load_mono_hit();
             } else {
-                MAL_FEEDBACK_OBSERVE_RECEIVER(ic, object);
+                MAL_FEEDBACK_OBSERVE_RECEIVER(ic, object, *out);
                 MAL_PERF_COUNT(ic_load_slot_key_hits);
             }
-            *out = mal_object_field_load_shaped(object, ic->slot);
             return true;
         }
     }
@@ -2499,7 +2499,7 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     if (object != nullptr && ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
         vm->inherited_property_stub != nullptr &&
         mal_vm_inherited_stub_value_try_load(vm, object, ic->key, out)) {
-        MAL_FEEDBACK_OBSERVE_RECEIVER(ic, object);
+        MAL_FEEDBACK_OBSERVE_RECEIVER(ic, object, *out);
         return true;
     }
     return mal_vm_property_try_load_static(vm, receiver, ic, out);
@@ -3822,9 +3822,9 @@ static inline __attribute__((always_inline)) bool mal_vm_property_leaf_try_load_
         }
         if (ic->prim_kind == 0 &&
             mal_shape_slot_holds_data_key(object->shape, ic->slot, ic->key)) {
-            MAL_FEEDBACK_OBSERVE_RECEIVER(ic, object);
             MAL_PERF_COUNT(ic_load_slot_key_hits);
             *out = mal_object_leaf_field_load_shaped(object, ic->slot);
+            MAL_FEEDBACK_OBSERVE_RECEIVER(ic, object, *out);
             return true;
         }
     }

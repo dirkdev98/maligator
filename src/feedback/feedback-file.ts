@@ -1,10 +1,16 @@
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { writeFileAtomically } from "../atomic-file.ts";
-import type { FeedbackShape, FeedbackSiteValue } from "./dump.ts";
+import type {
+	FeedbackPropertyValue,
+	FeedbackShape,
+	FeedbackSiteValue,
+	FeedbackTargets,
+} from "./dump.ts";
 
 export const FEEDBACK_FORMAT = "maligator-feedback-v1";
 const MAX_SHAPES = 4;
+const MAX_TARGETS = 4;
 
 type FeedbackEntry = { units: Array<number> } & FeedbackSiteValue;
 
@@ -42,15 +48,67 @@ function sortedShapes(shapes: Iterable<FeedbackShape>): Array<FeedbackShape> {
 	});
 }
 
+/** A value's receiver part, absent for a `call` site's value. */
+export function feedbackPropertyPart(
+	value: FeedbackSiteValue,
+): FeedbackPropertyValue | undefined {
+	if ("megamorphic" in value) return { megamorphic: true };
+	if ("dictionary" in value) return { dictionary: true };
+	if ("mode" in value)
+		return {
+			mode: value.mode,
+			...(value.shapes === undefined ? {} : { shapes: value.shapes }),
+			...(value.kind === undefined ? {} : { kind: value.kind }),
+		};
+	if ("shapes" in value && value.shapes !== undefined)
+		return {
+			shapes: value.shapes,
+			...(value.kind === undefined ? {} : { kind: value.kind }),
+		};
+	return undefined;
+}
+
+export function feedbackTargetPart(value: FeedbackSiteValue): FeedbackTargets {
+	if (value.targetsMegamorphic === true) return { targetsMegamorphic: true };
+	return value.targets === undefined ? {} : { targets: value.targets };
+}
+
+/** Targets union; more than four distinct names are megamorphic. */
+export function combineTargets(
+	left: FeedbackTargets,
+	right: FeedbackTargets,
+): FeedbackTargets {
+	if (left.targetsMegamorphic === true || right.targetsMegamorphic === true)
+		return { targetsMegamorphic: true };
+	const names = new Set([...(left.targets ?? []), ...(right.targets ?? [])]);
+	if (names.size > MAX_TARGETS) return { targetsMegamorphic: true };
+	return names.size === 0 ? {} : { targets: [...names].sort() };
+}
+
 /**
  * Combine what several caches saw for one source site, as a reader combines
  * units: the same mode and receiver kind union their shapes up to four; anything
- * else that differs, a dictionary among them, is megamorphic.
+ * else that differs, a dictionary among them, is megamorphic. Targets combine
+ * separately, by union.
  */
 export function combineSiteValues(
 	left: FeedbackSiteValue,
 	right: FeedbackSiteValue,
 ): FeedbackSiteValue {
+	const targets = combineTargets(feedbackTargetPart(left), feedbackTargetPart(right));
+	const leftProperty = feedbackPropertyPart(left);
+	const rightProperty = feedbackPropertyPart(right);
+	if (leftProperty === undefined || rightProperty === undefined) {
+		const property = leftProperty ?? rightProperty;
+		return property === undefined ? targets : { ...property, ...targets };
+	}
+	return { ...combinePropertyValues(leftProperty, rightProperty), ...targets };
+}
+
+function combinePropertyValues(
+	left: FeedbackPropertyValue,
+	right: FeedbackPropertyValue,
+): FeedbackPropertyValue {
 	if ("megamorphic" in left || "megamorphic" in right) return { megamorphic: true };
 	if ("dictionary" in left || "dictionary" in right)
 		return "dictionary" in left && "dictionary" in right ? left : { megamorphic: true };
@@ -70,16 +128,29 @@ export function combineSiteValues(
 	};
 }
 
-function entryOf(units: Array<number>, value: FeedbackSiteValue): FeedbackEntry {
-	if ("megamorphic" in value) return { units, megamorphic: true };
-	if ("dictionary" in value) return { units, dictionary: true };
+function propertyEntry(
+	value: FeedbackPropertyValue | undefined,
+): FeedbackPropertyValue | Record<never, never> {
+	if (value === undefined) return {};
+	if ("megamorphic" in value) return { megamorphic: true };
+	if ("dictionary" in value) return { dictionary: true };
 	const kind = value.kind === undefined ? {} : { kind: value.kind };
-	if (!("mode" in value)) return { units, ...kind, shapes: sortedShapes(value.shapes) };
+	if (!("mode" in value)) return { ...kind, shapes: sortedShapes(value.shapes) };
 	return {
-		units,
 		...kind,
 		mode: value.mode,
 		...(value.shapes === undefined ? {} : { shapes: sortedShapes(value.shapes) }),
+	};
+}
+
+function entryOf(units: Array<number>, value: FeedbackSiteValue): FeedbackEntry {
+	const targets = feedbackTargetPart(value);
+	return {
+		units,
+		...propertyEntry(feedbackPropertyPart(value)),
+		...(targets.targets === undefined
+			? targets
+			: { targets: [...targets.targets].sort() }),
 	};
 }
 
