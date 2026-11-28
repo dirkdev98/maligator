@@ -17,6 +17,7 @@
 #include "bound_function_object.h"
 #include "builtin_object.h"
 #include "checked_size.h"
+#include "feedback.h"
 #include "fiber.h"
 #include "function_object.h"
 #include "gc.h"
@@ -1014,6 +1015,7 @@ static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program
 	MalFiber *main_fiber = malloc(sizeof(MalFiber));
 	mal_fiber_init_main(main_fiber, vm);
 	mal_profile_init(vm);
+	mal_feedback_init(vm);
 }
 
 void mal_vm_init(MalVm *vm, const MalRuntimeImage *program) {
@@ -1144,6 +1146,7 @@ void mal_vm_free(MalVm *vm) {
         free(entry);
     }
 	mal_profile_finish(vm);
+	mal_feedback_finish(vm);
     mal_vm_run_runtime_cleanups(vm);
     // Tear down fibers. Spawned fibers own their stack + exec buffers (freed by
     // mal_fiber_destroy); the main fiber adopted vm->value_stack / vm->frames, so

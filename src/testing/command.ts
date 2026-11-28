@@ -23,7 +23,7 @@ import type { TestEvent, TestFailure, TestRunResult } from "./protocol.ts";
 import { scheduleTestJobs } from "./scheduler.ts";
 import { TestApplicationSession, TestSourceChangedError } from "./session.ts";
 import type { TestGenerationControls } from "./session.ts";
-import { compileLinkedTestImage } from "./test-images.ts";
+import { compileLinkedTestImage, testProgramGraph } from "./test-images.ts";
 import type { CompiledLinkedTestImage } from "./test-images.ts";
 
 export interface TestCommandSummary {
@@ -268,6 +268,7 @@ export function prepareIsolatedTestCommand(
 		files,
 		discoveryMs,
 		frontendMs: Date.now() - frontendStartedAt,
+		sourceGraph: () => testProgramGraph(files, options, session),
 	};
 }
 

@@ -32,6 +32,7 @@ export interface RunCommand {
 	verbose: boolean;
 	profile: boolean;
 	profileCompiler?: boolean;
+	feedback?: string;
 	programArgs: Array<string>;
 }
 
@@ -43,6 +44,7 @@ export interface DevCommand {
 	status?: boolean;
 	profile: boolean;
 	profileCompiler?: boolean;
+	feedback?: string;
 	programArgs: Array<string>;
 }
 
@@ -64,6 +66,7 @@ export interface TestCommand {
 	verbose?: boolean;
 	profile: boolean;
 	profileCompiler?: boolean;
+	feedback?: string;
 }
 
 export interface CacheCommand {
@@ -220,6 +223,13 @@ const profile = flag(
 	{ alias: "--profile=compiler", label: "--profile[=compiler]" },
 );
 
+const feedback = value(
+	"--feedback",
+	"file",
+	"Record what property sites saw into a feedback file",
+	(command: { feedback?: string }, file) => (command.feedback = file),
+);
+
 type DoctorCommand = Extract<CliCommand, { kind: "doctor" }>;
 type CacheOptions = CacheCommand & { all?: true };
 type RunOptions = Omit<DevCommand, "kind">;
@@ -258,6 +268,7 @@ const ffiJson = flag(
 const runOptions: ReadonlyArray<CliOption<RunOptions>> = [
 	config,
 	profile,
+	feedback,
 	flag("--verbose", "Show compiler diagnostics", (command) => (command.verbose = true)),
 ];
 
@@ -570,6 +581,7 @@ const COMMAND_HELP = {
 				command.bail = true;
 			}),
 			profile,
+			feedback,
 			flag("--verbose", "Show compiler diagnostics (requires --profile)", (command) => {
 				command.verbose = true;
 			}),
@@ -743,6 +755,8 @@ function parseRun(args: Array<string>, kind: "run" | "dev"): CliCommand {
 		command.entry = argument;
 	}
 
+	if (command.feedback !== undefined && command.profile)
+		throw new CliUsageError("--feedback cannot be combined with --profile");
 	return command;
 }
 
@@ -873,6 +887,14 @@ function parseTest(args: Array<string>): CliCommand {
 		throw new CliUsageError("--watch-failed requires --watch");
 	if (command.status && !command.watch)
 		throw new CliUsageError("test --status requires --watch");
+	if (command.feedback !== undefined) {
+		if (command.profile)
+			throw new CliUsageError("--feedback cannot be combined with --profile");
+		if (command.watch)
+			throw new CliUsageError("--feedback cannot be combined with --watch");
+		if (command.isolation !== undefined)
+			throw new CliUsageError("--feedback cannot be combined with --isolate");
+	}
 	return command;
 }
 

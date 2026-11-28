@@ -348,6 +348,24 @@ function testImageEnvironment(
 	});
 }
 
+/** Every module of the test program, parsed as its images compile them. */
+export function testProgramGraph(
+	entries: Array<string>,
+	options: CompileTestImageOptions,
+	session: TestCompilationSession,
+): ModuleGraph {
+	return buildModuleGraph(
+		path.join(path.dirname(entries[0]!), ".maligator-test-plan.mts"),
+		{
+			...graphOptions(options, session),
+			entryGoal: "module",
+			entrySource: importsOf([TEST_BOOTSTRAP_MODULE_ID, ...entries]),
+			virtualModules: testVirtualModules(options),
+			transformSource: { files: new Set(entries), transform: wrapTestEntry },
+		},
+	);
+}
+
 /** Every module of the test program, from which the images are planned. */
 function planningGraph(
 	entries: Array<string>,
@@ -355,16 +373,7 @@ function planningGraph(
 	session: TestCompilationSession,
 ): ModuleGraph {
 	const selected = new Set(entries);
-	const graph = buildModuleGraph(
-		path.join(path.dirname(entries[0]!), ".maligator-test-plan.mts"),
-		{
-			...graphOptions(options, session),
-			entryGoal: "module",
-			entrySource: importsOf([TEST_BOOTSTRAP_MODULE_ID, ...entries]),
-			virtualModules: testVirtualModules(options),
-			transformSource: { files: selected, transform: wrapTestEntry },
-		},
-	);
+	const graph = testProgramGraph(entries, options, session);
 	if (graph.workerEntries?.length)
 		throw new UnsupportedLinkedImagesError(
 			"worker roots require whole-program test images",

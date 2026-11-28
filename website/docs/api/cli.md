@@ -43,7 +43,8 @@ Artifacts include the executable in `bin/`, a manifest, checksums, and license f
 ## run {#run}
 
 ```shell
-maligator run [entry] [--config path] [--profile[=compiler]] [--verbose] [-- args...]
+maligator run [entry] [--config path] [--profile[=compiler]] [--feedback file]
+  [--verbose] [-- args...]
 ```
 
 Compiles a development image and runs it in a fresh VM. The npm platform package supplies a toolchain-free runner for matching configurations without C bindings. `run` forwards arguments after `--` and propagates the application's exit status or terminating signal. It reports unsuccessful exits on stderr. A config is optional when you pass the entry explicitly.
@@ -52,7 +53,7 @@ Compiles a development image and runs it in a fresh VM. The npm platform package
 
 ```shell
 maligator dev [entry] [--config path] [--status]
-  [--profile[=compiler]] [--verbose] [-- args...]
+  [--profile[=compiler]] [--feedback file] [--verbose] [-- args...]
 ```
 
 Watches dependencies and replaces the application after successful rebuilds. A compile error preserves the watcher and last good application. Every replacement has fresh module instances. `--status` streams generations and resource states. Ctrl+C joins active work. See [Develop an application](/guides/development).
@@ -63,7 +64,8 @@ Watches dependencies and replaces the application after successful rebuilds. A c
 maligator test [path ...] [--config path] [--run name]
   [--shuffle [seed]] [--repeat count] [--timeout milliseconds] [--bail]
   [--isolate] [--compile-concurrency count] [--concurrency count]
-  [--watch] [--watch-failed] [--status] [--profile[=compiler]] [--verbose]
+  [--watch] [--watch-failed] [--status] [--profile[=compiler]]
+  [--feedback file] [--verbose]
 ```
 
 Discovers `*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}`. Ordinary runs interpret a development image and can use the packaged runner. Selected files share one application isolate by default. Every selected test runs on each invocation. A failing test produces a nonzero exit status.
@@ -83,6 +85,12 @@ Discovers `*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}`. Ordinary runs i
 | `--status`              | Off. Requires watch; stream generation and resource states.                          |
 
 `--verbose` shows compiler diagnostics during profiling. `--isolate` cannot combine with profiling. See [Test an application](/guides/testing) for a complete suite.
+
+## --feedback {#feedback}
+
+Available on `run`, `dev`, and `test`. Records what each executed property access saw into a JSON feedback file: the object shapes, an inline cache mode such as `inherited`, or `megamorphic` once a site saw more than four shapes or shapes it can't name. Sites are keyed by their source function and offset, so a later build can match them while the source is unchanged. Sites that never ran are absent.
+
+Each command records one unit: `run:<entry>`, `dev:<entry>`, or `test:*` for a whole test invocation. Recording a unit replaces its earlier entries and keeps every other unit's, so one file can collect several workloads. The file is deterministic: an identical run writes identical bytes. `dev` re-records its unit when each generation stops. `--feedback` cannot combine with `--profile`, and on `test` not with `--watch` or `--isolate`.
 
 ## --profile {#profile}
 

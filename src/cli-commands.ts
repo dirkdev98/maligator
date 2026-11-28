@@ -81,6 +81,7 @@ import {
 } from "./compiler/frontend/compact-type-strip.ts";
 import type { EmbedDeclaration } from "./compiler/frontend/embed-declarations.ts";
 import { imageNeedsHostEventLoop } from "./compiler/frontend/host-modules.ts";
+import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
 import {
 	formatSyntaxDiagnostic,
 	SyntaxDiagnostic,
@@ -99,6 +100,7 @@ import {
 	developmentFragmentUnits,
 } from "./development-fragments.ts";
 import { createDevelopmentSession } from "./development-session.ts";
+import { feedbackDumpPath, recordFeedbackCapture } from "./feedback/record.ts";
 import { checkLibraries, formatFfiCheck } from "./ffi/check.ts";
 import { declarationsCurrent, generateDeclarations } from "./ffi/declarations.ts";
 import {
@@ -139,6 +141,7 @@ import {
 	hostExecutionTarget,
 	resolveExecution,
 } from "./platform/execution.ts";
+import type { Execution } from "./platform/execution.ts";
 import type { DevelopmentRunnerSourceDigests } from "./prebuilt-runtime.ts";
 import {
 	createProfileCapture,
@@ -377,6 +380,16 @@ export interface BuildCommandResult {
 	/** The `maligator:assets` declarations the prepared images reach. */
 	embedDeclarations?: Array<EmbedDeclaration>;
 	profile?: PreparedProfile;
+	/** How to attribute a `--feedback` recording of the development images. */
+	feedback?: FeedbackSources;
+}
+
+/** Plain data, so a result prepared by a compiler service can carry it. */
+interface FeedbackSources {
+	unit: string;
+	entry: string;
+	execution: Execution;
+	wires: Array<string>;
 }
 
 class CommandError extends Error {
@@ -837,6 +850,17 @@ function prepareCommandState(
 				? executionTarget(command.target)
 				: hostExecutionTarget(process.platform, process.arch),
 	});
+	const feedbackSources = (wires: Array<string>): { feedback?: FeedbackSources } =>
+		command.kind === "build" || command.feedback === undefined
+			? {}
+			: {
+					feedback: {
+						unit: `${command.kind}:${path.relative(process.cwd(), entrypointPath).split(path.sep).join("/")}`,
+						entry: entrypointPath,
+						execution,
+						wires,
+					},
+				};
 	const compilerDiagnostics = command.kind === "build" && command.internal.dumpCore;
 	const relocatable =
 		interpreted ||
@@ -1073,7 +1097,8 @@ function prepareCommandState(
 			reporter.detail("Development images", wirePaths.join(", "));
 			reporter.complete("Ready", prebuiltExecutable, false);
 			return {
-				...(embeddedRunner?.inProcess
+				// Feedback is dumped by a runner process as it exits.
+				...(embeddedRunner?.inProcess && command.feedback === undefined
 					? {
 							applicationImage: {
 								schema: 2 as const,
@@ -1101,6 +1126,7 @@ function prepareCommandState(
 				dependencies,
 				dependencyIdentities,
 				...declared,
+				...feedbackSources(wirePaths),
 			};
 		}
 		if (packagedRunner !== undefined) ({ toolchain, plan } = resolveLocalTools());
@@ -1257,6 +1283,7 @@ function prepareCommandState(
 				dependencies,
 				dependencyIdentities,
 				...declared,
+				...feedbackSources(wirePaths),
 			};
 		}
 
@@ -1545,11 +1572,14 @@ async function runPreparedCommand(
 			? createProfileCapture("run", result.profile)
 			: undefined;
 	if (gmallocEnabled()) log.info("Running under Guard Malloc (MAL_GMALLOC).");
+	const feedback = feedbackCapture(command, context, result);
 	const outcome = executeBinary(binaryPath, result.runArguments ?? command.programArgs, {
 		...runEnv(),
 		...(capture === undefined ? {} : capture.environment),
 		...compilerProfileRuntimeEnvironment(command),
+		...feedback?.environment,
 	});
+	feedback?.record();
 	if (capture !== undefined && result.profile !== undefined) {
 		if (existsSync(capture.capturePath)) {
 			try {
@@ -1574,6 +1604,44 @@ async function runPreparedCommand(
 	}
 	reportRunOutcome(outcome);
 	return outcome;
+}
+
+/** Where the runner dumps its caches for `--feedback`, and how to translate the dump. */
+function feedbackCapture(
+	command: RunCommand | DevCommand,
+	context: CommandContext,
+	result: BuildCommandResult,
+): { environment: { MAL_FEEDBACK_CAPTURE: string }; record(): void } | undefined {
+	const sources = result.feedback;
+	if (command.feedback === undefined) return undefined;
+	if (sources === undefined) {
+		writeStderr("warning: --feedback records only interpreted development images");
+		return undefined;
+	}
+	const output = path.resolve(command.feedback);
+	const dumpPath = feedbackDumpPath(output);
+	return {
+		environment: { MAL_FEEDBACK_CAPTURE: dumpPath },
+		record: () =>
+			recordFeedbackCapture(
+				{
+					dumpPath,
+					output,
+					unit: sources.unit,
+					wires: sources.wires,
+					sources: () =>
+						buildModuleGraph(sources.entry, {
+							buildConfig: loadCommandConfig(command, context.stripTypes),
+							execution: sources.execution,
+							stripTypes: context.stripTypes,
+							platformSourceRoot: path.resolve(
+								context.installation.platformSourceRoot ?? import.meta.dirname,
+							),
+						}),
+				},
+				writeStderr,
+			),
+	};
 }
 
 interface LaunchedApplication {
@@ -1859,19 +1927,22 @@ export async function devCommand(
 	let activeGeneration = 0;
 	let verifiedDependencies = new Map<string, FrontendDependencyIdentity>();
 	const applicationEvaluationFailed = new Error("Application evaluation failed");
+	let activeFeedback: ReturnType<typeof feedbackCapture>;
 	const spawnApplication = (build: BuildCommandResult, generation: number) => {
 		activeProfile = nextProfile(build);
+		activeFeedback = feedbackCapture(command, context, build);
 		// The next generation adopts the listening sockets this one leaves, so a
 		// request during the restart waits instead of being refused.
 		const launched = launchApplication(
 			build,
 			command.programArgs,
 			context,
-			activeProfile === undefined
+			activeProfile === undefined && activeFeedback === undefined
 				? undefined
 				: {
-						...activeProfile.environment,
+						...activeProfile?.environment,
 						...compilerProfileRuntimeEnvironment(command),
+						...activeFeedback?.environment,
 					},
 			true,
 		);
@@ -1920,6 +1991,9 @@ export async function devCommand(
 		}
 		child = undefined;
 		finalizeActiveProfile();
+		// Each generation re-records the same unit, so the last one stopped wins.
+		activeFeedback?.record();
+		activeFeedback = undefined;
 	};
 	const restoreActiveApplication = () => {
 		if (!stopping && activeBuild !== undefined) {
@@ -2468,20 +2542,45 @@ async function executeIsolatedTests(
 	});
 	const producers = new CommandProducers("test", writeStderr);
 	const executionStartedAt = Date.now();
+	const feedbackOutput =
+		command.feedback === undefined ? undefined : path.resolve(command.feedback);
+	const feedbackDump =
+		feedbackOutput === undefined ? undefined : feedbackDumpPath(feedbackOutput);
 	let outcome: Awaited<ReturnType<typeof executeBinaryReported>>;
 	try {
 		await producers.prepare(
 			embedDeclarationsOfWires(wirePaths.map((wire) => readFileSync(wire))),
 		);
-		outcome = await executeBinaryReported(runner, args, runEnv(environment), {
-			timeoutMs: options.timeoutMs,
-			resultPrefix: ISOLATED_TEST_RESULT_PREFIX,
-			stdout: options.stdout,
-			stderr: options.stderr,
-		});
+		outcome = await executeBinaryReported(
+			runner,
+			args,
+			{
+				...runEnv(environment),
+				...(feedbackDump === undefined ? {} : { MAL_FEEDBACK_CAPTURE: feedbackDump }),
+			},
+			{
+				timeoutMs: options.timeoutMs,
+				resultPrefix: ISOLATED_TEST_RESULT_PREFIX,
+				stdout: options.stdout,
+				stderr: options.stderr,
+			},
+		);
 	} finally {
 		await producers.close();
 	}
+	if (feedbackOutput !== undefined && feedbackDump !== undefined)
+		recordFeedbackCapture(
+			{
+				dumpPath: feedbackDump,
+				output: feedbackOutput,
+				// One unit per invocation until tests attribute sites to their files.
+				unit: "test:*",
+				wires: wirePaths,
+				sources: compiled.sourceGraph,
+				transformed: new Set(compiled.files),
+			},
+			writeStderr,
+		);
 	const executionMs = Date.now() - executionStartedAt;
 	options.onExecution?.(outcome, executionMs);
 	if (outcome.timedOut || outcome.status !== 0 || outcome.result === undefined) {
@@ -2877,9 +2976,10 @@ export async function runCli(
 						"error: this runtime policy requires a shared test subprocess; isolated or concurrent test sessions are unavailable",
 					);
 				}
+				// A feedback dump comes from a runner process as it exits.
 				result = command.profile
 					? await executeProfiledTests(command, context, config)
-					: developmentRunner?.inProcess === true
+					: developmentRunner?.inProcess === true && command.feedback === undefined
 						? await executeTestCommand(command, context, config)
 						: await executeIsolatedTests(command, context, config, developmentRunner);
 			} catch (error) {
