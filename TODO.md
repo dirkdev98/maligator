@@ -126,7 +126,14 @@ static generated-code size and helper counts do not establish runtime cost.
       `mal_vm_call_cached` already saves all but about 10 instructions per call, and
       converting 354M calls made self-compile 0.5% slower with 3.6% more code. Inlining
       saves 99 to 137 per call on small bodies, so the open question is which sites
-      deserve the budget.
+      deserve the budget. About 359M of self-compile's generic calls go to some 40 Core
+      store accessors (a `#retired` check, a typed-array read, cold throws). Inlining
+      their hot path as ordinary Core blocks at 1,555 more sites removed 48.7M calls but
+      made self-compile 0.78% slower and its compile 5.2% longer: each site added 10 to
+      14 blocks, and the generic element probe costs more than the accessor's own
+      typed-array read. A retry needs one Core instruction for the whole guarded read,
+      lowered to straight-line C with a single miss label, and an element read that
+      checks the receiver once as the expected typed array.
 
 - [ ] Inline guarded call targets recorded by `run --feedback` once the inliner takes
       the bodies that matter. A prototype that inlined every single-target Express call
