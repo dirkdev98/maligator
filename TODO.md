@@ -472,17 +472,21 @@ distinct when measuring text work.
       repeated record/list/query routes with matched layout before changing admission.
 
 - [ ] Close the in-process Express gap. `bench/http/express-in-process.cjs` in raw mode
-      retires about 139k instructions per request against Node's 89k and Bun's 106k,
-      although sockets and parsing put Maligator ahead in the HTTP benchmark. Generated
-      JavaScript takes about 40k (router `next`, `layer.match`, content-type parsing,
-      `response.send`), property access about 33k, allocation and GC 7.6k, RegExp
-      7k and call dispatch 4.8k. Leads: `mal_vm_op_load_property_ic` saves six
-      register pairs and sets up a stack guard before its first check, likely from its
-      inlined `_impl` and a two-element roots array; the shared String method helper
-      pays a 176-byte frame and a stack guard on 34 calls per request; growing objects
-      allocate 5.7 slot arrays per request, and 24.5 of 36.9 grow calls do nothing;
-      Buffer encoding names cost about 250 instructions per lookup. Take loop counts
-      from production perf builds, since `--profile=compiler` plans no loop regions.
+      retires about 132k instructions per request against Node's 87-91k, although
+      sockets and parsing put Maligator ahead in the HTTP benchmark. Generated code
+      takes about 37k, spread thinly over more than 40 functions: cached property
+      hits are a fifth of it (19 instructions per hit), function entry and exit
+      another fifth (about 50 per call, 146 calls per request), call sites a sixth.
+      Leads: choose store and GC-barrier code by the stored value (inline field
+      stores on cache hits, no barriers on a fresh scope's first stores, one isolate
+      lookup per call); a lighter function entry (static function index, caches
+      allocated with the closure, no argument unpacking for direct calls with
+      matching counts); inlining inherited-method lookups at the 697 call loads,
+      which costs about 0.9% generated code. A one-compare own-slot check that tagged
+      non-slot rows shortened hits to 16 instructions and shrank generated code 6.6%,
+      but Express and self-compile each retired about 0.65% more instructions. Take
+      loop counts from production perf builds, since `--profile=compiler` plans no
+      loop regions.
 
 - [ ] Bound remaining String and traversal costs before extending specialization:
       the reused-RegExp receiver check and matcher call, trimmed slices, numeric
