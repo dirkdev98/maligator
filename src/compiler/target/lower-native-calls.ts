@@ -47,7 +47,12 @@ export function selectNativeCallTransports(
 	if (entries.size === 0) return [];
 	// A record parameter needs a record call that keeps its storage, which in turn
 	// needs its own record entry; drop record calls that get none until both agree.
-	let stored = new Set(native.recordCalls?.map((site) => site.callIp) ?? []);
+	const forwarded = new Set(native.recordForwardIps);
+	let stored = new Set(
+		native.recordCalls
+			?.filter((site) => !forwarded.has(site.callIp))
+			.map((site) => site.callIp),
+	);
 	for (;;) {
 		const passes = new Map<string, NativeRecordLayout>();
 		for (const site of native.recordCalls ?? []) {

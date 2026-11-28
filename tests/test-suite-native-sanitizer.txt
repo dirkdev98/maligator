@@ -64,6 +64,7 @@ tests/native/eval-gc-runtime-compilation-p0.test.ts
 tests/native/exact-callback-lifetime.test.ts
 tests/native/factory-projection.test.ts
 tests/native/record-sort-callback.test.ts
+tests/native/record-result-forwarding.test.ts
 tests/native/record-iteration.test.ts
 tests/native/record-columns.test.ts
 tests/native/literal-object-assign.test.ts

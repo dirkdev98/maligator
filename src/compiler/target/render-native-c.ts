@@ -6805,6 +6805,9 @@ function renderRecordCallSlots(
 		addUses(site, parameter, []);
 	}
 	for (const plan of native.recordCalls ?? []) {
+		// The ordinary body may materialize a record at its return. A forwarding
+		// entry has proved that the record can go straight to its caller's slots.
+		if (native.recordForwardIps?.includes(plan.callIp)) continue;
 		const entry = entryOf(plan.callIp);
 		if (entry?.resultFields === undefined) continue;
 		const layout = entry.resultFields;
@@ -16121,9 +16124,18 @@ class NativeInstructionEmission {
 				) ?? `mal_value_to_function_object(${directCallee})->creation_env`;
 			if (directEntry !== undefined && transport !== undefined) {
 				const directValue = `__direct_value_${this.ip}`;
+				const recordCall = this.context.recordCall;
 				const forward =
 					this.context.recordForwarded !== undefined &&
 					directEntry.resultFields !== undefined;
+				const resultPointers = forward
+					? directEntry.resultFields.keys.map((_, field) => `rf${field}`)
+					: recordCall === undefined
+						? []
+						: [
+								...recordCall.slots,
+								...(recordCall.shapes === undefined ? [] : [recordShape(recordCall)]),
+							].map((slot) => `&${slot}`);
 				const recordArguments = (directEntry.recordParameters ?? []).map(
 					(parameter) =>
 						this.context.recordPasses?.find((pass) => pass.argument === parameter.index)
@@ -16131,17 +16143,7 @@ class NativeInstructionEmission {
 				);
 				const parameters = [
 					...directEntryParameters(transport),
-					...(this.context.recordCall === undefined
-						? []
-						: [
-								...this.context.recordCall.slots,
-								...(this.context.recordCall.shapes === undefined
-									? []
-									: [recordShape(this.context.recordCall)]),
-							].map((slot) => `&${slot}`)),
-					...(forward
-						? directEntry.resultFields.keys.map((_, field) => `rf${field}`)
-						: []),
+					...resultPointers,
 					...recordArguments.flatMap((site, index) =>
 						site === undefined
 							? []
@@ -16149,7 +16151,8 @@ class NativeInstructionEmission {
 					),
 				];
 				if (
-					(this.context.recordCall !== undefined || forward) !==
+					(recordCall !== undefined && forward) ||
+					(recordCall !== undefined || forward) !==
 						(directEntry.resultFields !== undefined) ||
 					recordArguments.some((site) => site === undefined) ||
 					recordArguments.length !== (this.context.recordPasses?.length ?? 0)
@@ -16177,16 +16180,16 @@ class NativeInstructionEmission {
 					`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = ${this.context.relocation.reference(`mal_direct_${this.context.relocation.stem(target)}_${directEntry.id}${this.suffix}`)}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, ${directEnvironment}, ${directCallee});`,
 					`if (MAL_THREW()) ${this.onThrow()}`,
 					`r${instruction.dst} = ${directResult};`,
-					...(this.context.recordCall?.object === undefined
+					...(recordCall?.object === undefined
 						? []
 						: [
 								// Another returned value is the record itself, as if observed.
-								this.context.recordCall.escapes
-									? `${recordObject(this.context.recordCall)} = ${this.boxed(instruction.dst)};`
-									: `${recordObject(this.context.recordCall)} = MAL_VALUE_EMPTY;`,
-								...(this.context.recordCall.producer === undefined
+								recordCall.escapes
+									? `${recordObject(recordCall)} = ${this.boxed(instruction.dst)};`
+									: `${recordObject(recordCall)} = MAL_VALUE_EMPTY;`,
+								...(recordCall.producer === undefined
 									? []
-									: [`${recordProducer(this.context.recordCall)} = ${directCallee};`]),
+									: [`${recordProducer(recordCall)} = ${directCallee};`]),
 							]),
 					this.callPoll(),
 				];
