@@ -426,11 +426,13 @@ object. Retained loop experiments preserve effects, authoritative state and fall
       where necessary. Keep remarks consistent with emission and distinguish static
       opportunities from executed or sampled counts.
 
-- [ ] Make `--profile=compiler` work on self-compile. `PreparedProfile.fromMetadata`
-      (src/profile-artifact.ts) fails with `RangeError: Invalid string length`: the
-      metadata JSON is about 590M characters (`sites` alone 400M), over V8's string
-      limit, and finalize parses the same string again, so streaming only the write
-      is not enough.
+- [ ] Keep self-compile's `--profile=compiler` reports below V8's string limit for
+      readers. `summary.json` (458 MB) and `compiler.json` (340 MB) are written in
+      chunks, but a reader that parses either whole is at 85% and 63% of the limit;
+      write them as JSON Lines or drop the decisions repeated per finding. The
+      compile-cache codec (src/compiler-profile-codec.ts) still stores every site's
+      strings and chain in full, about 250 MB per self-compile profile image; intern
+      them as the metadata sidecar does.
 
 - [ ] Keep loop regions in `--profile=compiler` builds, or mark the census where they
       are off. The compiler-mode profile build plans no typed string loop regions, so
