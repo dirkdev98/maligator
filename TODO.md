@@ -190,10 +190,14 @@ static generated-code size and helper counts do not establish runtime cost.
       instructions do not move, because a guarded direct call still enters the
       target's ordinary compiled entry with an argument array and saves only the
       call-cache lookup, about 6 instructions, while the extra admissions grow the
-      native self-compiler's `__text` by 3%. The saving has to come from inlining
-      these small methods or giving them typed direct entries; the cross-call
-      transforms decline 882 of 964 such inline offers on the program budget.
-      `layer.handleRequest` in `trim_prefix` has no loop weight.
+      native self-compiler's `__text` by 3%. Inlining does not pay either: raising the
+      cross-call budget or ordering offers by measured exposure inlined the two
+      busiest eligible misses (5.1 and 4.5 calls per request) with no Express gain,
+      and a 2x budget costs native self-compile 3.1-3.4% more compile instructions
+      and 7.6% more generated code for 2.3% faster compiled output. Typed direct
+      entries that skip the argument array remain to try; `layer.match` (8.4 calls
+      per request) gets no inline offer, and `layer.handleRequest` in `trim_prefix`
+      has no loop weight.
 
 - [ ] Admit iterator-cursor, entry-pair, enumeration-snapshot and indexed-loop plans in
       async functions and generators for loops that contain no `await` or `yield`. Each
