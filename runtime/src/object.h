@@ -112,7 +112,10 @@ static inline const MalObjectStorage *mal_object_storage_const(const MalObject *
     if (object->storage_kind == MAL_OBJECT_EMBEDDED) {
         return (const MalObjectStorage *) (object + 1);
     }
-    assert(object->storage_kind == MAL_OBJECT_EXTERNAL);
+    // Exotic and grown objects reach this behind compact-first branches that LLVM treats
+    // as cold call sites, where only very cheap bodies inline. An assert's call priced it
+    // out and made every non-compact field read a call; a trap keeps the check that cheap.
+    if (__builtin_expect(object->storage_kind != MAL_OBJECT_EXTERNAL, 0)) __builtin_trap();
     MalObjectStorage *storage;
     memcpy(&storage, object + 1, sizeof(storage));
     return storage;
