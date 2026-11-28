@@ -589,6 +589,12 @@ distinct when measuring text work.
 
 ## Active correctness clusters
 
+- [ ] Reject a null super base before converting a computed `super[k]` key. Current
+      ECMAScript keeps the raw key in the super reference and converts it in
+      GetValue/PutValue after the base check, so `k`'s conversion hooks must not run
+      when the home object's prototype is null; the lowering in
+      `semantic-lowering.ts` and `mal_vm_op_load_super_property` convert first.
+
 - [ ] Resolve Intl locale availability and matching per service from bundled data.
       Preserve requested-locale order, lookup and best-fit semantics, relevant Unicode
       extensions and observable option coercion. Provider fallback alone does not prove
