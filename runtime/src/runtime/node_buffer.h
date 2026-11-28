@@ -78,6 +78,9 @@ typedef enum MalBufferEncoding {
     MAL_BUFFER_UTF16LE,
 } MalBufferEncoding;
 
+/** Match a Buffer encoding name using ASCII case folding, leaving `out` untouched on a miss. */
+bool mal_node_buffer_resolve_encoding(MalString *string, MalBufferEncoding *out);
+
 typedef struct MalBufferStringDecodePlan {
     MalBufferEncoding encoding;
     usize byte_capacity;

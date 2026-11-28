@@ -39,36 +39,64 @@
 #define MAL_BUFFER_MAX_LENGTH INT32_MAX
 #define MAL_BUFFER_INSPECT_MAX_BYTES 50u
 
-static bool mal_buffer_ascii_equal_ci(const MalString *string, const char *ascii) {
-    return mal_string_equals_ascii_ci(string, ascii);
+// Keep the segment iterator's frame off the flat lowercase path.
+static __attribute__((noinline)) bool mal_buffer_encoding_matches_ci(
+    const MalString *string, const char *name
+) {
+    return mal_string_equals_ascii_ci(string, name);
 }
 
-/* Name-only lookup, with no VM and no throwing, so callers that must *observe*
- * "not a known encoding" (rather than turn it into an error) can. */
-static bool mal_buffer_encoding_named(const MalString *string, MalBufferEncoding *out) {
-    if (mal_buffer_ascii_equal_ci(string, "utf8") ||
-        mal_buffer_ascii_equal_ci(string, "utf-8")) {
-        *out = MAL_BUFFER_UTF8;
-    } else if (mal_buffer_ascii_equal_ci(string, "latin1") ||
-               mal_buffer_ascii_equal_ci(string, "binary")) {
-        *out = MAL_BUFFER_LATIN1;
-    } else if (mal_buffer_ascii_equal_ci(string, "ascii")) {
-        *out = MAL_BUFFER_ASCII;
-    } else if (mal_buffer_ascii_equal_ci(string, "hex")) {
-        *out = MAL_BUFFER_HEX;
-    } else if (mal_buffer_ascii_equal_ci(string, "base64")) {
-        *out = MAL_BUFFER_BASE64;
-    } else if (mal_buffer_ascii_equal_ci(string, "base64url")) {
-        *out = MAL_BUFFER_BASE64URL;
-    } else if (mal_buffer_ascii_equal_ci(string, "ucs2") ||
-               mal_buffer_ascii_equal_ci(string, "ucs-2") ||
-               mal_buffer_ascii_equal_ci(string, "utf16le") ||
-               mal_buffer_ascii_equal_ci(string, "utf-16le")) {
-        *out = MAL_BUFFER_UTF16LE;
-    } else {
+static inline bool mal_buffer_match_encoding(
+    const MalString *string, const u8 *latin1, const char *name,
+    MalBufferEncoding encoding, MalBufferEncoding *out
+) {
+    if ((latin1 == nullptr || memcmp(latin1, name, strlen(name)) != 0)
+        && !mal_buffer_encoding_matches_ci(string, name)) {
         return false;
     }
+    *out = encoding;
     return true;
+}
+
+bool mal_node_buffer_resolve_encoding(MalString *string, MalBufferEncoding *out) {
+    usize length = mal_string_length(string);
+    if (length < 3 || length > 9) return false;
+    const u8 *latin1 = nullptr;
+    if (string->latin1 && string->storage < MAL_STRING_STORAGE_DEPENDENT) {
+        latin1 = string->storage == MAL_STRING_STORAGE_INLINE
+            ? mal_string_inline_latin1(string) : string->latin1_units;
+    }
+
+    // The length and third unit distinguish every supported spelling.
+    c16 third = latin1 != nullptr ? latin1[2] : mal_string_code_unit_at(string, 2);
+    switch ((length << 16) | mal_ascii_to_lower(third)) {
+        case (3u << 16) | 'x':
+            return mal_buffer_match_encoding(string, latin1, "hex", MAL_BUFFER_HEX, out);
+        case (4u << 16) | 'f':
+            return mal_buffer_match_encoding(string, latin1, "utf8", MAL_BUFFER_UTF8, out);
+        case (4u << 16) | 's':
+            return mal_buffer_match_encoding(string, latin1, "ucs2", MAL_BUFFER_UTF16LE, out);
+        case (5u << 16) | 'f':
+            return mal_buffer_match_encoding(string, latin1, "utf-8", MAL_BUFFER_UTF8, out);
+        case (5u << 16) | 's':
+            return mal_buffer_match_encoding(string, latin1, "ucs-2", MAL_BUFFER_UTF16LE, out);
+        case (5u << 16) | 'c':
+            return mal_buffer_match_encoding(string, latin1, "ascii", MAL_BUFFER_ASCII, out);
+        case (6u << 16) | 't':
+            return mal_buffer_match_encoding(string, latin1, "latin1", MAL_BUFFER_LATIN1, out);
+        case (6u << 16) | 'n':
+            return mal_buffer_match_encoding(string, latin1, "binary", MAL_BUFFER_LATIN1, out);
+        case (6u << 16) | 's':
+            return mal_buffer_match_encoding(string, latin1, "base64", MAL_BUFFER_BASE64, out);
+        case (7u << 16) | 'f':
+            return mal_buffer_match_encoding(string, latin1, "utf16le", MAL_BUFFER_UTF16LE, out);
+        case (8u << 16) | 'f':
+            return mal_buffer_match_encoding(string, latin1, "utf-16le", MAL_BUFFER_UTF16LE, out);
+        case (9u << 16) | 's':
+            return mal_buffer_match_encoding(string, latin1, "base64url", MAL_BUFFER_BASE64URL, out);
+        default:
+            return false;
+    }
 }
 
 static bool mal_buffer_encoding(
@@ -88,7 +116,7 @@ static bool mal_buffer_encoding(
                            "The encoding argument must be a string");
         return false;
     }
-    if (!mal_buffer_encoding_named(mal_value_to_string(value), out)) {
+    if (!mal_node_buffer_resolve_encoding(mal_value_to_string(value), out)) {
         if (fallback_unknown) {
             *out = fallback;
             return true;
@@ -247,7 +275,7 @@ static usize mal_buffer_encoded_string_length(
 MalBufferStringDecodePlan mal_node_buffer_plan_string_decode(MalValue string, MalValue encoding) {
     MalBufferEncoding resolved = MAL_BUFFER_UTF8;
     if (mal_value_is_string(encoding))
-        (void) mal_buffer_encoding_named(mal_value_to_string(encoding), &resolved);
+        (void) mal_node_buffer_resolve_encoding(mal_value_to_string(encoding), &resolved);
     const MalString *input = mal_value_to_string(string);
     usize length = mal_string_length(input);
     usize capacity;
@@ -581,7 +609,7 @@ static MalValue mal_node_buffer_encode(
     }
     MalBufferEncoding resolved;
     if (!mal_value_is_string(encoding)
-        || !mal_buffer_encoding_named(mal_value_to_string(encoding), &resolved)) {
+        || !mal_node_buffer_resolve_encoding(mal_value_to_string(encoding), &resolved)) {
         if (throw_on_unknown) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                                "Unknown Buffer encoding");
@@ -612,7 +640,7 @@ MalValue mal_node_buffer_encode_secret_bytes(
 bool mal_node_buffer_encoding_is_known(MalValue encoding) {
     MalBufferEncoding resolved;
     return mal_value_is_string(encoding)
-        && mal_buffer_encoding_named(mal_value_to_string(encoding), &resolved);
+        && mal_node_buffer_resolve_encoding(mal_value_to_string(encoding), &resolved);
 }
 
 static MalValue mal_buffer_is_encoding(
@@ -1985,7 +2013,7 @@ static bool mal_buffer_named_encoding(
         *out = MAL_BUFFER_UTF8;
         return true;
     }
-    if (mal_value_is_string(value) && mal_buffer_encoding_named(mal_value_to_string(value), out)) {
+    if (mal_value_is_string(value) && mal_node_buffer_resolve_encoding(mal_value_to_string(value), out)) {
         return true;
     }
     *known = false;

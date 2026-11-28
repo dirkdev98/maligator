@@ -32,6 +32,19 @@ it("keeps native input refinements scoped to successful guarded operations", () 
 	expect(runToStdout(pair.interpreted)).toBe(expected);
 });
 
+it("matches Node's Buffer encoding names, aliases, errors and defaults", () => {
+	const fixture = "tests/local/node-buffer-encodings.mjs";
+	const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+	const pair = buildBackendPairFromOneProgramImage({
+		fixture,
+		name: "node-buffer-encodings",
+		mainFile: HOST_MAIN,
+		outDir,
+	});
+	expect(runToStdout(pair.compiled)).toBe(expected);
+	expect(runToStdout(pair.interpreted)).toBe(expected);
+});
+
 describe("global Buffer and node:buffer", () => {
 	let esmCompiled: string;
 	let esmInterpreted: string;

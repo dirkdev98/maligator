@@ -1,10 +1,10 @@
 #include "node_string_decoder.h"
+#include "node_buffer.h"
 #include "node_module.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-#include "ascii.h"
 #include "array_buffer_object.h"
 #include "base64.h"
 #include "builtin_data_view.h"
@@ -21,72 +21,34 @@
 #include "value.h"
 #include "vm_ops.h"
 
-typedef enum MalStringDecoderEncoding {
-    MAL_SD_UTF8,
-    MAL_SD_UTF16LE,
-    MAL_SD_LATIN1,
-    MAL_SD_ASCII,
-    MAL_SD_BASE64,
-    MAL_SD_BASE64URL,
-    MAL_SD_HEX,
-} MalStringDecoderEncoding;
-
 typedef struct MalStringDecoderState {
     MalObject *object;
-    MalStringDecoderEncoding encoding;
+    MalBufferEncoding encoding;
     u32 pending;
 } MalStringDecoderState;
 
-static bool sd_ascii_equal_ci(const MalString *string, const char *ascii) {
-    return mal_string_equals_ascii_ci(string, ascii);
-}
-
 static bool sd_encoding(
-    MalVm *vm, MalValue value, MalStringDecoderEncoding *encoding,
+    MalVm *vm, MalValue value, MalBufferEncoding *encoding,
     const char **canonical
 ) {
-    if (mal_value_is_undefined(value) || mal_value_is_null(value)) {
-        *encoding = MAL_SD_UTF8;
-        *canonical = "utf8";
-        return true;
-    }
-    if (!mal_value_is_string(value)) {
+    static const char *const names[] = {
+        [MAL_BUFFER_UTF8] = "utf8",
+        [MAL_BUFFER_UTF16LE] = "utf16le",
+        [MAL_BUFFER_LATIN1] = "latin1",
+        [MAL_BUFFER_ASCII] = "ascii",
+        [MAL_BUFFER_BASE64] = "base64",
+        [MAL_BUFFER_BASE64URL] = "base64url",
+        [MAL_BUFFER_HEX] = "hex",
+    };
+    MalString *string = mal_value_is_string(value) ? mal_value_to_string(value) : nullptr;
+    if (mal_value_is_nil(value) || (string != nullptr && mal_string_length(string) == 0)) {
+        *encoding = MAL_BUFFER_UTF8;
+    } else if (string == nullptr || !mal_node_buffer_resolve_encoding(string, encoding)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                            "Unknown StringDecoder encoding");
         return false;
     }
-    MalString *string = mal_value_to_string(value);
-    if (mal_string_length(string) == 0 || sd_ascii_equal_ci(string, "utf8") ||
-        sd_ascii_equal_ci(string, "utf-8")) {
-        *encoding = MAL_SD_UTF8;
-        *canonical = "utf8";
-    } else if (sd_ascii_equal_ci(string, "utf16le") ||
-               sd_ascii_equal_ci(string, "utf-16le") ||
-               sd_ascii_equal_ci(string, "ucs2") ||
-               sd_ascii_equal_ci(string, "ucs-2")) {
-        *encoding = MAL_SD_UTF16LE;
-        *canonical = "utf16le";
-    } else if (sd_ascii_equal_ci(string, "latin1") ||
-               sd_ascii_equal_ci(string, "binary")) {
-        *encoding = MAL_SD_LATIN1;
-        *canonical = "latin1";
-    } else if (sd_ascii_equal_ci(string, "ascii")) {
-        *encoding = MAL_SD_ASCII;
-        *canonical = "ascii";
-    } else if (sd_ascii_equal_ci(string, "base64")) {
-        *encoding = MAL_SD_BASE64;
-        *canonical = "base64";
-    } else if (sd_ascii_equal_ci(string, "base64url")) {
-        *encoding = MAL_SD_BASE64URL;
-        *canonical = "base64url";
-    } else if (sd_ascii_equal_ci(string, "hex")) {
-        *encoding = MAL_SD_HEX;
-        *canonical = "hex";
-    } else {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                           "Unknown StringDecoder encoding");
-        return false;
-    }
+    *canonical = names[*encoding];
     return true;
 }
 
@@ -117,9 +79,9 @@ static bool sd_read_state(
         goto mismatch;
     }
     i32 raw_encoding = mal_value_to_i32(encoding.desc.value);
-    if (raw_encoding < MAL_SD_UTF8 || raw_encoding > MAL_SD_HEX) goto mismatch;
+    if (raw_encoding < MAL_BUFFER_UTF8 || raw_encoding > MAL_BUFFER_UTF16LE) goto mismatch;
     state->object = object;
-    state->encoding = (MalStringDecoderEncoding) raw_encoding;
+    state->encoding = (MalBufferEncoding) raw_encoding;
     state->pending = (u32) mal_value_to_i32(pending.desc.value);
     return true;
 
@@ -351,7 +313,7 @@ static MalValue sd_decode_base64(
     if (joined == nullptr) return sd_allocation_error(vm);
     usize consumed = total - total % 3;
     usize retained = total - consumed;
-    bool padding = state->encoding == MAL_SD_BASE64;
+    bool padding = state->encoding == MAL_BUFFER_BASE64;
     usize input_length = final ? total : consumed;
     usize output_length;
     if (!mal_base64_encoded_length(
@@ -377,7 +339,7 @@ static MalValue sd_decode_base64(
         byte encoded[4];
         usize encoded_length = mal_base64_encode_block(
             joined + read, block_length,
-            state->encoding == MAL_SD_BASE64URL
+            state->encoding == MAL_BUFFER_BASE64URL
                 ? MAL_BASE64_ALPHABET_URL
                 : MAL_BASE64_ALPHABET_STANDARD,
             padding, encoded);
@@ -403,7 +365,7 @@ static MalValue sd_decode_stateless(
     MalVm *vm, MalStringDecoderState *state, const byte *data, usize length
 ) {
     usize output_length = length;
-    if (state->encoding == MAL_SD_HEX
+    if (state->encoding == MAL_BUFFER_HEX
         && !mal_hex_encoded_length(length, MAL_STRING_MAX_CODE_UNITS, &output_length)) {
         sd_checked_output(vm, MAL_STRING_MAX_CODE_UNITS + 1);
         return mal_value_new_undefined();
@@ -411,7 +373,7 @@ static MalValue sd_decode_stateless(
     if (!sd_checked_output(vm, output_length)) return mal_value_new_undefined();
     c16 *units = malloc(sizeof(c16) * (output_length == 0 ? 1 : output_length));
     if (units == nullptr) return sd_allocation_error(vm);
-    if (state->encoding == MAL_SD_HEX) {
+    if (state->encoding == MAL_BUFFER_HEX) {
         for (usize i = 0; i < length; i++) {
             byte encoded[2];
             mal_hex_encode_byte_lower(data[i], encoded);
@@ -420,7 +382,7 @@ static MalValue sd_decode_stateless(
         }
     } else {
         for (usize i = 0; i < length; i++) {
-            units[i] = state->encoding == MAL_SD_ASCII
+            units[i] = state->encoding == MAL_BUFFER_ASCII
                 ? (u8) data[i] & 0x7f
                 : (u8) data[i];
         }
@@ -435,16 +397,16 @@ static MalValue sd_decode(
     bool final
 ) {
     switch (state->encoding) {
-        case MAL_SD_UTF8:
+        case MAL_BUFFER_UTF8:
             return sd_decode_utf8(vm, state, data, length, final);
-        case MAL_SD_UTF16LE:
+        case MAL_BUFFER_UTF16LE:
             return sd_decode_utf16le(vm, state, data, length, final);
-        case MAL_SD_BASE64:
-        case MAL_SD_BASE64URL:
+        case MAL_BUFFER_BASE64:
+        case MAL_BUFFER_BASE64URL:
             return sd_decode_base64(vm, state, data, length, final);
-        case MAL_SD_LATIN1:
-        case MAL_SD_ASCII:
-        case MAL_SD_HEX:
+        case MAL_BUFFER_LATIN1:
+        case MAL_BUFFER_ASCII:
+        case MAL_BUFFER_HEX:
             return sd_decode_stateless(vm, state, data, length);
     }
     return mal_value_new_undefined();
@@ -490,7 +452,7 @@ static MalValue sd_constructor(
                            "StringDecoder constructor requires 'new'");
         return mal_value_new_undefined();
     }
-    MalStringDecoderEncoding encoding;
+    MalBufferEncoding encoding;
     const char *canonical;
     if (!sd_encoding(vm, argc > 0 ? args[0] : mal_value_new_undefined(),
                      &encoding, &canonical)) {
