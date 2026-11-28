@@ -6236,46 +6236,16 @@ MalCompletion mal_vm_construct_direct(
         vm, expected_function_index, callee, args, arg_count, callee);
 }
 
-static MalCompletion mal_vm_construct_with_native_target(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target, MalNativeFunctionCallback exact_callback) {
+// [[Construct]] for every callee but a native constructing itself: proxies, bound
+// functions, other new.targets and script functions. Out of line, so its argument
+// buffer and roots put no stack guard or frame on the native fast path.
+static __attribute__((noinline)) MalCompletion mal_vm_construct_general(
+    MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target,
+    MalNativeFunctionCallback exact_callback
+) {
 #if MAL_PROFILE && MAL_PERF_STATS
     i32 saved_profile_site = vm->profile_current_site_id;
 #endif
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return vm->completion;
-    }
-
-    // `new C(...)` with C itself as new.target, such as every regex literal: no proxy
-    // trap, bound target, or prototype from another new.target applies.
-    if (new_target == callee && mal_value_is_native_function_object(callee)) {
-        MalNativeFunctionObject *native_function = mal_value_to_native_function_object(callee);
-        if (!mal_native_function_object_is_constructor(native_function)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
-            return vm->completion;
-        }
-#if MAL_REALMS
-        MalRealm *saved_realm = vm->current_realm;
-        mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
-#endif
-        MAL_PROFILE_NATIVE_CALL(vm, native_function);
-        MalNativeFunctionCallback callback = exact_callback != nullptr
-            ? exact_callback : mal_native_function_object_callback(native_function);
-        MalCalleeRoots ncr;
-        mal_gc_callee_roots_begin(&ncr, mal_value_new_undefined(), new_target, callee, args, arg_count);
-        vm->gc_native_frames++;
-        MalValue value = callback(vm, mal_value_new_undefined(), args, arg_count, new_target, callee);
-        vm->gc_native_frames--;
-        mal_gc_callee_roots_end(&ncr);
-#if MAL_REALMS
-        mal_vm_realm_switch_to(vm, saved_realm);
-#endif
-#if MAL_PROFILE && MAL_PERF_STATS
-        vm->profile_current_site_id = saved_profile_site;
-#endif
-        return vm->completion.kind == MAL_COMPLETION_THROW
-            ? vm->completion
-            : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
-    }
-
     // A constructable proxy routes [[Construct]] through its construct trap.
     if (mal_value_is_proxy_object(callee)) {
         MalCompletion proxy_completion =
@@ -6523,6 +6493,57 @@ static MalCompletion mal_vm_construct_with_native_target(MalVm *vm, MalValue cal
     vm->profile_current_site_id = saved_profile_site;
 #endif
     return completion;
+}
+
+// `new C(...)` with C itself as new.target, such as every regex literal: no proxy trap,
+// bound target, or prototype from another new.target applies.
+static __attribute__((noinline)) MalCompletion mal_vm_construct_native_self(
+    MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count,
+    MalNativeFunctionCallback exact_callback
+) {
+    MalValue new_target = callee;
+#if MAL_PROFILE && MAL_PERF_STATS
+    i32 saved_profile_site = vm->profile_current_site_id;
+#endif
+    MalNativeFunctionObject *native_function = mal_value_to_native_function_object(callee);
+    if (!mal_native_function_object_is_constructor(native_function)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
+        return vm->completion;
+    }
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
+#endif
+    MAL_PROFILE_NATIVE_CALL(vm, native_function);
+    MalNativeFunctionCallback callback = exact_callback != nullptr
+        ? exact_callback : mal_native_function_object_callback(native_function);
+    MalCalleeRoots ncr;
+    mal_gc_callee_roots_begin(&ncr, mal_value_new_undefined(), new_target, callee, args, arg_count);
+    vm->gc_native_frames++;
+    MalValue value = callback(vm, mal_value_new_undefined(), args, arg_count, new_target, callee);
+    vm->gc_native_frames--;
+    mal_gc_callee_roots_end(&ncr);
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+#if MAL_PROFILE && MAL_PERF_STATS
+    vm->profile_current_site_id = saved_profile_site;
+#endif
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? vm->completion
+        : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+}
+
+// Both cases keep their frames out of line, so the dispatch needs none. It stays out of
+// line itself, since its exported wrappers would otherwise copy it into every caller.
+static __attribute__((noinline)) MalCompletion mal_vm_construct_with_native_target(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target, MalNativeFunctionCallback exact_callback) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return vm->completion;
+    }
+    if (new_target == callee && mal_value_is_native_function_object(callee)) {
+        return mal_vm_construct_native_self(vm, callee, args, arg_count, exact_callback);
+    }
+    return mal_vm_construct_general(vm, callee, args, arg_count, new_target, exact_callback);
 }
 
 MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target) {

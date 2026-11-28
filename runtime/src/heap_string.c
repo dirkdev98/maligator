@@ -1196,22 +1196,37 @@ static MalString *mal_string_new_append_buffer(MalHeap *heap, bool latin1, usize
     return buffer;
 }
 
-static bool mal_string_try_append(
-    MalHeap *heap, MalString *left, MalString *right, usize length, MalString **out
-) {
-    MalString *buffer = nullptr;
-    if (left->storage == MAL_STRING_STORAGE_DEPENDENT && left->slice_offset == 0 &&
-            left->parent->storage == MAL_STRING_STORAGE_BUILDER &&
-            left->parent->length == left->length) {
-        buffer = left->parent;
-        if (buffer->latin1 && !right->latin1) return false;
-    } else if (left->storage != MAL_STRING_STORAGE_CONS || right->length > MAL_STRING_APPEND_PIECE_MAX ||
-            (left->left->storage != MAL_STRING_STORAGE_CONS &&
-             left->right->storage != MAL_STRING_STORAGE_CONS)) {
-        // A second rope link distinguishes a growing chain from a short
-        // concatenation before paying for a backing buffer and dependent prefix.
-        return false;
+/*
+ * The cases of mal_string_new_cons_checked and the append path. Each is out of line and
+ * reached through a tail call: the short cases' unit buffers would otherwise put a stack
+ * guard and every case's registers on the shared entry. They always succeed, and clang
+ * would return that known result after an ordinary call, keeping a frame on the entry,
+ * so the tail calls are forced and the cases share the entry's signature.
+ */
+#if defined(__clang__) && !defined(__wasm__) && __has_attribute(musttail)
+#define MAL_STRING_CONCAT_TAIL __attribute__((musttail)) return
+#else
+#define MAL_STRING_CONCAT_TAIL return
+#endif
+
+// Whether `left + right` extends an append buffer: `left` is its longest prefix, or a
+// rope with a second rope link, which distinguishes a growing chain from a short
+// concatenation before paying for a backing buffer and dependent prefix.
+static inline bool mal_string_appends(const MalString *left, const MalString *right) {
+    if (left->storage == MAL_STRING_STORAGE_DEPENDENT) {
+        return left->slice_offset == 0 && left->parent->storage == MAL_STRING_STORAGE_BUILDER &&
+            left->parent->length == left->length && (!left->parent->latin1 || right->latin1);
     }
+    return left->storage == MAL_STRING_STORAGE_CONS && right->length <= MAL_STRING_APPEND_PIECE_MAX &&
+        (left->left->storage == MAL_STRING_STORAGE_CONS ||
+         left->right->storage == MAL_STRING_STORAGE_CONS);
+}
+
+static __attribute__((noinline)) bool mal_string_append(
+    MalHeap *heap, MalString *left, MalString *right, MalString **out
+) {
+    usize length = (usize) left->length + right->length;
+    MalString *buffer = left->storage == MAL_STRING_STORAGE_DEPENDENT ? left->parent : nullptr;
     bool latin1 = buffer != nullptr ? buffer->latin1 : left->latin1 && right->latin1;
     usize unit = latin1 ? sizeof(u8) : sizeof(c16);
     if (buffer == nullptr || length > buffer->hash) {
@@ -1234,77 +1249,76 @@ static bool mal_string_try_append(
     return true;
 }
 
-bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *right, MalString **out) {
-    if (left == nullptr || right == nullptr || out == nullptr) {
-        abort();
-    }
-    if (left->length == 0 || right->length == 0) {
-        abort();
-    }
-
-    usize length;
-    if (!mal_checked_size_add(left->length, right->length, MAL_STRING_MAX_CODE_UNITS, &length)) {
-        return false;
-    }
-
-    // Keep the eager cutoff below inline capacity to avoid hashing short-lived intermediates.
-    if (length <= 4) {
-        if (left->latin1 && right->latin1 &&
-            left->storage < MAL_STRING_STORAGE_DEPENDENT &&
-            right->storage < MAL_STRING_STORAGE_DEPENDENT) {
-            MalStringSegment left_segment = mal_string_leaf_segment(left, 0, left->length);
-            MalStringSegment right_segment = mal_string_leaf_segment(right, 0, right->length);
-            u8 units[MAL_STRING_INLINE_CODE_UNITS];
-            mal_string_copy_inline_latin1(units, left_segment.latin1_units, left->length);
-            mal_string_copy_inline_latin1(
-                units + left->length, right_segment.latin1_units, right->length);
-            MAL_PERF_COUNT(string_inline_concat_results);
-            *out = mal_string_new_latin1_copy(heap, units, length);
-            return true;
-        }
-        c16 units[MAL_STRING_INLINE_CODE_UNITS];
-        mal_string_copy_range_to(left, 0, left->length, units);
-        mal_string_copy_range_to(right, 0, right->length, units + left->length);
-        MAL_PERF_COUNT(string_inline_concat_results);
-        *out = mal_string_new_copy(heap, units, length);
-        return true;
-    }
-    // A flat inline result costs one cell like a rope node, but bypasses the
-    // tiny cache (and its hash) and spares later readers every rope descent.
-    if (length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS && left->latin1 && right->latin1 &&
-        left->storage < MAL_STRING_STORAGE_DEPENDENT && right->storage < MAL_STRING_STORAGE_DEPENDENT) {
+// The eager cutoff stays below inline capacity to avoid hashing short-lived intermediates.
+static __attribute__((noinline)) bool mal_string_new_short_concat(
+    MalHeap *heap, MalString *left, MalString *right, MalString **out
+) {
+    usize length = (usize) left->length + right->length;
+    if (left->latin1 && right->latin1 &&
+        left->storage < MAL_STRING_STORAGE_DEPENDENT &&
+        right->storage < MAL_STRING_STORAGE_DEPENDENT) {
         MalStringSegment left_segment = mal_string_leaf_segment(left, 0, left->length);
         MalStringSegment right_segment = mal_string_leaf_segment(right, 0, right->length);
-        MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
-        mal_string_init_flat(string, MAL_STRING_STORAGE_INLINE, true, length);
+        u8 units[MAL_STRING_INLINE_CODE_UNITS];
+        mal_string_copy_inline_latin1(units, left_segment.latin1_units, left->length);
         mal_string_copy_inline_latin1(
-            mal_string_inline_latin1(string), left_segment.latin1_units, left->length);
-        mal_string_copy_inline_latin1(
-            mal_string_inline_latin1(string) + left->length, right_segment.latin1_units, right->length);
-        mal_perf_string_allocation(length);
+            units + left->length, right_segment.latin1_units, right->length);
         MAL_PERF_COUNT(string_inline_concat_results);
-        MAL_PERF_COUNT(string_inline_allocations);
-        MAL_PERF_ADD(string_inline_code_units, length);
-        *out = string;
+        *out = mal_string_new_latin1_copy(heap, units, length);
         return true;
     }
-    if (length <= MAL_STRING_INLINE_CODE_UNITS &&
-        left->storage < MAL_STRING_STORAGE_DEPENDENT && right->storage < MAL_STRING_STORAGE_DEPENDENT) {
-        c16 units[MAL_STRING_INLINE_CODE_UNITS];
-        MalStringSegment left_segment = mal_string_leaf_segment(left, 0, left->length);
-        MalStringSegment right_segment = mal_string_leaf_segment(right, 0, right->length);
-        mal_string_copy_segment_to(&left_segment, units);
-        mal_string_copy_segment_to(&right_segment, units + left->length);
-        MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
-        mal_string_init_inline(string, units, length);
-        mal_perf_string_allocation(length);
-        MAL_PERF_COUNT(string_inline_concat_results);
-        MAL_PERF_COUNT(string_inline_allocations);
-        MAL_PERF_ADD(string_inline_code_units, length);
-        *out = string;
-        return true;
-    }
+    c16 units[MAL_STRING_INLINE_CODE_UNITS];
+    mal_string_copy_range_to(left, 0, left->length, units);
+    mal_string_copy_range_to(right, 0, right->length, units + left->length);
+    MAL_PERF_COUNT(string_inline_concat_results);
+    *out = mal_string_new_copy(heap, units, length);
+    return true;
+}
 
+// A flat inline result costs one cell like a rope node, but bypasses the tiny cache (and
+// its hash) and spares later readers every rope descent.
+static __attribute__((noinline)) bool mal_string_new_inline_latin1_concat(
+    MalHeap *heap, MalString *left, MalString *right, MalString **out
+) {
+    usize length = (usize) left->length + right->length;
+    MalStringSegment left_segment = mal_string_leaf_segment(left, 0, left->length);
+    MalStringSegment right_segment = mal_string_leaf_segment(right, 0, right->length);
+    MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
+    mal_string_init_flat(string, MAL_STRING_STORAGE_INLINE, true, length);
+    mal_string_copy_inline_latin1(
+        mal_string_inline_latin1(string), left_segment.latin1_units, left->length);
+    mal_string_copy_inline_latin1(
+        mal_string_inline_latin1(string) + left->length, right_segment.latin1_units, right->length);
+    mal_perf_string_allocation(length);
+    MAL_PERF_COUNT(string_inline_concat_results);
+    MAL_PERF_COUNT(string_inline_allocations);
+    MAL_PERF_ADD(string_inline_code_units, length);
+    *out = string;
+    return true;
+}
+
+static __attribute__((noinline)) bool mal_string_new_inline_concat(
+    MalHeap *heap, MalString *left, MalString *right, MalString **out
+) {
+    usize length = (usize) left->length + right->length;
+    c16 units[MAL_STRING_INLINE_CODE_UNITS];
+    MalStringSegment left_segment = mal_string_leaf_segment(left, 0, left->length);
+    MalStringSegment right_segment = mal_string_leaf_segment(right, 0, right->length);
+    mal_string_copy_segment_to(&left_segment, units);
+    mal_string_copy_segment_to(&right_segment, units + left->length);
+    MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
+    mal_string_init_inline(string, units, length);
+    mal_perf_string_allocation(length);
+    MAL_PERF_COUNT(string_inline_concat_results);
+    MAL_PERF_COUNT(string_inline_allocations);
+    MAL_PERF_ADD(string_inline_code_units, length);
+    *out = string;
+    return true;
+}
+
+static __attribute__((noinline)) bool mal_string_new_rope_concat(
+    MalHeap *heap, MalString *left, MalString *right, MalString **out
+) {
     MalString *string = mal_string_join(heap, left, right);
     // Repeated prepends must not rehash a growing suffix; append-biased joins can carry the prefix.
     if (left->hash_valid && left->length > MAL_STRING_INLINE_CODE_UNITS &&
@@ -1319,14 +1333,40 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
     return true;
 }
 
+bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *right, MalString **out) {
+    if (left == nullptr || right == nullptr || out == nullptr) {
+        abort();
+    }
+    if (left->length == 0 || right->length == 0) {
+        abort();
+    }
+
+    usize length;
+    if (!mal_checked_size_add(left->length, right->length, MAL_STRING_MAX_CODE_UNITS, &length)) {
+        return false;
+    }
+    if (length <= 4) {
+        MAL_STRING_CONCAT_TAIL mal_string_new_short_concat(heap, left, right, out);
+    }
+    bool flat = left->storage < MAL_STRING_STORAGE_DEPENDENT &&
+        right->storage < MAL_STRING_STORAGE_DEPENDENT;
+    if (length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS && left->latin1 && right->latin1 && flat) {
+        MAL_STRING_CONCAT_TAIL mal_string_new_inline_latin1_concat(heap, left, right, out);
+    }
+    if (length <= MAL_STRING_INLINE_CODE_UNITS && flat) {
+        MAL_STRING_CONCAT_TAIL mal_string_new_inline_concat(heap, left, right, out);
+    }
+    MAL_STRING_CONCAT_TAIL mal_string_new_rope_concat(heap, left, right, out);
+}
+
 bool mal_string_append_checked(MalHeap *heap, MalString *left, MalString *right, MalString **out) {
     usize length;
     if (!mal_checked_size_add(left->length, right->length, MAL_STRING_MAX_CODE_UNITS, &length)) {
         return false;
     }
     if (length > MAL_STRING_INLINE_LATIN1_CODE_UNITS && left->length != 0 && right->length != 0 &&
-            mal_string_try_append(heap, left, right, length, out)) {
-        return true;
+            mal_string_appends(left, right)) {
+        MAL_STRING_CONCAT_TAIL mal_string_append(heap, left, right, out);
     }
     return mal_string_new_cons_checked(heap, left, right, out);
 }

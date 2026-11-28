@@ -300,7 +300,7 @@ static __attribute__((noinline)) MalShape *regexp_instance_shape_create(MalVm *v
     return vm->regexp_instance_shape;
 }
 
-// The one-time creation stays out of line so the canonical check saves no registers.
+// The one-time creation stays out of line so its callers save no registers.
 static inline MalShape *regexp_instance_shape(MalVm *vm) {
     MalShape *shape = vm->regexp_instance_shape;
     return shape != nullptr ? shape : regexp_instance_shape_create(vm);
@@ -309,6 +309,8 @@ static inline MalShape *regexp_instance_shape(MalVm *vm) {
 // Exact type + layout reject subclasses, proxies, own overrides, descriptor
 // changes, and deleted/re-added symbol/index properties. The monotonic protector
 // proves the current realm's RegExp prototype and constructor are still built-ins.
+// Every RegExp starts with the instance shape, so the VM holds it whenever a receiver
+// can; reading the field keeps the check free of calls and frames.
 static bool regexp_canonical_instance(
     MalVm *vm, MalValue value, MalRegExpObject **out
 ) {
@@ -319,7 +321,7 @@ static bool regexp_canonical_instance(
     MalObject *object = (MalObject *) re;
     if (mal_object_get_prototype(object) !=
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE]) ||
-        object->shape != regexp_instance_shape(vm) || mal_object_overflow(object) != nullptr ||
+        object->shape != vm->regexp_instance_shape || mal_object_overflow(object) != nullptr ||
         !mal_object_is_extensible(object)) {
         return false;
     }
@@ -1648,26 +1650,38 @@ static MalValue regexp_proto_exec(MalVm *vm, MalValue this_value, const MalValue
         vm, re, this_value, s, REGEXP_BUILTIN_EXEC_RESULT, false, nullptr);
 }
 
-// test() on a canonical receiver once its subject is a string, when RegExpBuiltinExec's
-// lastIndex read cannot run code because it holds a Number. False leaves the call to
-// RegExpExec.
-static bool regexp_canonical_test(
-    MalVm *vm, MalRegExpObject *re, MalValue receiver, MalString *s, MalValue *out
+// A canonical receiver whose lastIndex holds a Number: RegExpBuiltinExec's read of it
+// cannot run code.
+static inline bool regexp_canonical_last_index_is_number(const MalRegExpObject *re) {
+    return mal_ops_is_number(mal_object_field_load(&re->object, re->object.shape->props[0].slot));
+}
+
+// Without g or y the builtin exec only reads lastIndex and matches from the start.
+static __attribute__((noinline)) MalValue regexp_canonical_test_from_start(
+    MalVm *vm, MalRegExpObject *re, MalString *s
 ) {
-    if (!mal_ops_is_number(mal_object_field_load(&re->object, re->object.shape->props[0].slot))) {
-        return false;
-    }
-    // Without g or y the builtin exec only reads lastIndex and matches from the start.
-    if ((re->flag_bits & (MAL_REGEXP_JS_GLOBAL | MAL_REGEXP_JS_STICKY)) == 0) {
-        int matched = regexp_match_only(vm, re->matcher, re->flag_bits, s, 0);
-        *out = matched < 0 ? mal_value_new_undefined() : mal_value_new_boolean(matched > 0);
-        return true;
-    }
+    int matched = regexp_match_only(vm, re->matcher, re->flag_bits, s, 0);
+    return matched < 0 ? mal_value_new_undefined() : mal_value_new_boolean(matched > 0);
+}
+
+static __attribute__((noinline)) MalValue regexp_canonical_test_exec(
+    MalVm *vm, MalRegExpObject *re, MalValue receiver, MalString *s
+) {
     MalValue match = regexp_builtin_exec(
         vm, re, receiver, s, REGEXP_BUILTIN_EXEC_MATCH_ONLY, false, nullptr);
-    *out = regexp_threw(vm) ? mal_value_new_undefined()
+    return regexp_threw(vm) ? mal_value_new_undefined()
         : mal_value_new_boolean(!mal_value_is_null(match));
-    return true;
+}
+
+// test() on a canonical receiver with a string subject and a Number lastIndex. Both
+// paths leave through tail calls, so the callers' checks need no frame.
+static inline MalValue regexp_canonical_test(
+    MalVm *vm, MalRegExpObject *re, MalValue receiver, MalString *s
+) {
+    if ((re->flag_bits & (MAL_REGEXP_JS_GLOBAL | MAL_REGEXP_JS_STICKY)) == 0) {
+        return regexp_canonical_test_from_start(vm, re, s);
+    }
+    return regexp_canonical_test_exec(vm, re, receiver, s);
 }
 
 // The current realm's own built-in `callback`, which the canonical checks presume.
@@ -1740,10 +1754,9 @@ static MalValue regexp_proto_test(MalVm *vm, MalValue this_value, const MalValue
         return mal_value_new_undefined();
     }
     MalRegExpObject *canonical;
-    MalValue result;
     if (regexp_canonical_instance(vm, this_value, &canonical) &&
-        regexp_canonical_test(vm, canonical, this_value, s, &result)) {
-        return result;
+        regexp_canonical_last_index_is_number(canonical)) {
+        return regexp_canonical_test(vm, canonical, this_value, s);
     }
     bool ok;
     MalValue match = regexp_exec_abstract(vm, this_value, s, true, &ok);
@@ -1753,23 +1766,36 @@ static MalValue regexp_proto_test(MalVm *vm, MalValue this_value, const MalValue
     return mal_value_new_boolean(!mal_value_is_null(match));
 }
 
-MalValue mal_regexp_test_call(MalVm *vm, MalValue callee, MalValue receiver, MalValue argument) {
-    if (!regexp_is_own_builtin(vm, callee, regexp_proto_test)) {
-        return mal_vm_call_cached_value(vm, callee, receiver, &argument, 1);
-    }
-    // A string subject needs no ToString, so the exec lookup that the canonical check
-    // stands for happens exactly where test() performs it.
-    MalRegExpObject *canonical;
-    MalValue result;
-    if (mal_value_is_string(argument) && regexp_canonical_instance(vm, receiver, &canonical) &&
-        regexp_canonical_test(vm, canonical, receiver, mal_value_to_string(argument), &result)) {
-        MAL_PERF_COUNT(regexp_direct_test_calls);
-        return result;
-    }
+// The calls that pass `argument` by address stay out of line, so the canonical checks
+// in mal_regexp_test_call need no frame and its hit leaves through a tail call.
+static __attribute__((noinline)) MalValue regexp_test_call_generic(
+    MalVm *vm, MalValue callee, MalValue receiver, MalValue argument
+) {
+    return mal_vm_call_cached_value(vm, callee, receiver, &argument, 1);
+}
+
+static __attribute__((noinline)) MalValue regexp_test_call_exact(
+    MalVm *vm, MalValue callee, MalValue receiver, MalValue argument
+) {
     MalCompletion completion =
         mal_vm_call_exact_native(vm, regexp_proto_test, callee, receiver, &argument, 1);
     if (completion.kind == MAL_COMPLETION_THROW) vm->completion = completion;
     return completion.value;
+}
+
+MalValue mal_regexp_test_call(MalVm *vm, MalValue callee, MalValue receiver, MalValue argument) {
+    if (!regexp_is_own_builtin(vm, callee, regexp_proto_test)) {
+        return regexp_test_call_generic(vm, callee, receiver, argument);
+    }
+    // A string subject needs no ToString, so the exec lookup that the canonical check
+    // stands for happens exactly where test() performs it.
+    MalRegExpObject *canonical;
+    if (mal_value_is_string(argument) && regexp_canonical_instance(vm, receiver, &canonical) &&
+        regexp_canonical_last_index_is_number(canonical)) {
+        MAL_PERF_COUNT(regexp_direct_test_calls);
+        return regexp_canonical_test(vm, canonical, receiver, mal_value_to_string(argument));
+    }
+    return regexp_test_call_exact(vm, callee, receiver, argument);
 }
 
 bool mal_regexp_literal_bind(

@@ -297,11 +297,11 @@ static inline byte *mal_ops_int32_digits(i32 integer, byte *end) {
     return cursor;
 }
 
-MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
-    if (mal_value_is_string(value)) {
-        return mal_value_to_string(value);
-    }
-
+// Every conversion that allocates or formats into a local buffer, out of line so the
+// buffers' stack guard and frame stay off mal_ops_to_string's string and cache hits.
+static __attribute__((noinline)) MalString *mal_ops_to_string_uncached(
+    MalHeap *heap, MalValue value
+) {
     if (mal_value_is_int32(value)) {
         i32 integer = mal_value_to_i32(value);
         MalVm *owner = nullptr;
@@ -312,11 +312,6 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
                     MAL_SMALL_UINT_STRING_CACHE_CAPACITY,
                     sizeof(*owner->small_uint_string_cache));
                 if (owner->small_uint_string_cache == nullptr) abort();
-            }
-            MalString *cached = owner->small_uint_string_cache[integer];
-            if (cached != nullptr) {
-                MAL_PERF_COUNT(string_small_uint_cache_hits);
-                return cached;
             }
             MAL_PERF_COUNT(string_small_uint_cache_misses);
         }
@@ -388,6 +383,23 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
     }
 
     return mal_ops_string_from_ascii(heap, "[object Object]");
+}
+
+// Out of line: inlined at its many mostly cold call sites, the hits would cost several
+// kilobytes of text for the call they save.
+__attribute__((noinline)) MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
+    if (mal_value_is_string(value)) {
+        return mal_value_to_string(value);
+    }
+    if (mal_value_is_int32(value) &&
+        (u32) mal_value_to_i32(value) < MAL_SMALL_UINT_STRING_CACHE_CAPACITY) {
+        MalString *const *cache = mal_vm_from_heap(heap)->small_uint_string_cache;
+        if (cache != nullptr && cache[mal_value_to_i32(value)] != nullptr) {
+            MAL_PERF_COUNT(string_small_uint_cache_hits);
+            return cache[mal_value_to_i32(value)];
+        }
+    }
+    return mal_ops_to_string_uncached(heap, value);
 }
 
 f64 mal_ops_to_number(MalValue value) {
