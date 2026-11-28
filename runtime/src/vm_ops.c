@@ -275,8 +275,13 @@ bool mal_local_string_builder_equals_string(
     return true;
 }
 
-static bool mal_vm_string_to_array_index(MalString *string, u32 *index_out) {
-    if (string->array_index_impossible) return false;
+/**
+ * Apart from the memo check in `mal_vm_string_to_array_index`, because the copy
+ * buffer gives this frame a stack guard that a memoized rejection should not pay.
+ */
+static __attribute__((noinline)) bool mal_vm_string_parse_array_index(
+    MalString *string, u32 *index_out
+) {
     usize length = mal_string_length(string);
     if (length == 0 || length > 10) {
         string->array_index_impossible = true;
@@ -304,6 +309,10 @@ static bool mal_vm_string_to_array_index(MalString *string, u32 *index_out) {
     }
     *index_out = (u32) value;
     return true;
+}
+
+static inline bool mal_vm_string_to_array_index(MalString *string, u32 *index_out) {
+    return !string->array_index_impossible && mal_vm_string_parse_array_index(string, index_out);
 }
 
 static i32 mal_vm_string_table_index(
@@ -362,7 +371,7 @@ bool mal_vm_string_is_canonical_numeric_index(MalVm *vm, MalString *string) {
     return mal_string_equals(string, round_trip);
 }
 
-static bool mal_vm_string_to_property_key_impl(
+static __attribute__((noinline)) bool mal_vm_string_to_property_key_slow(
     MalVm *vm, MalValue value, MalKey *key_out, bool atomize
 ) {
     u32 index = 0;
@@ -397,39 +406,40 @@ static bool mal_vm_string_to_property_key_impl(
     return true;
 }
 
+/**
+ * Static keys, constants and repeated names arrive as atoms, and an atom whose
+ * array-index parse already failed is its own string key. Both flags share one
+ * header word, so this answers before the conversion's frame, its constant-table
+ * search and the parse's stack guard. An index-like atom such as "0" keeps the
+ * slow path, which yields an index key.
+ */
+static inline bool mal_vm_string_to_property_key_impl(
+    MalVm *vm, MalValue value, MalKey *key_out, bool atomize
+) {
+    const MalString *string = mal_value_to_string(value);
+    if (string->property_atom && string->array_index_impossible) {
+        *key_out = (MalKey) {.kind = MAL_KEY_STRING, .value = value};
+        return true;
+    }
+    return mal_vm_string_to_property_key_slow(vm, value, key_out, atomize);
+}
+
 static bool mal_vm_string_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
     return mal_vm_string_to_property_key_impl(vm, value, key_out, true);
 }
 
 bool mal_vm_value_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
     // Spec ToPropertyKey, running an object's @@toPrimitive / valueOf / toString.
-    // The read-modify-write member lowering (compound assignment, ++/--) used to
-    // double-fire this conversion; the compiler now hoists it to a single
-    // toPropertyKey op whose string/symbol result re-keys here as a fast path, so
-    // the bytecode access path can run the full conversion safely.
+    // Compound assignment and ++/-- hoist their conversion into one toPropertyKey
+    // op, so the load and store that follow re-key its string, symbol or index
+    // result here without running user code twice.
     return mal_vm_to_property_key(vm, value, key_out);
 }
 
-// Spec ToPropertyKey (7.1.19): key = ? ToPrimitive(value, string); if it is a
-// Symbol return it, else return ? ToString(key). Unlike the bytecode shortcut
-// above this runs the object's @@toPrimitive / valueOf / toString exactly once,
-// so callers that convert a key a single time (the reflective Object/Reflect
-// builtins) observe correct coercion. Returns false on an abrupt completion.
-static bool mal_vm_to_property_key_impl(
+/** ToPropertyKey's ToPrimitive and ToString steps, for a key that is not yet a property key. */
+static __attribute__((noinline)) bool mal_vm_to_property_key_coerce(
     MalVm *vm, MalValue value, MalKey *key_out, bool atomize
 ) {
-    if (mal_value_is_int32(value) && mal_value_to_i32(value) >= 0) {
-        *key_out = mal_key_index(mal_value_to_i32(value));
-        return true;
-    }
-    if (mal_value_is_string(value)) {
-        return mal_vm_string_to_property_key_impl(vm, value, key_out, atomize);
-    }
-    if (mal_value_is_symbol(value)) {
-        *key_out = (MalKey) {.kind = MAL_KEY_SYMBOL, .value = value};
-        return true;
-    }
-
     MalValue primitive;
     if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_STRING, &primitive)) {
         return false;
@@ -446,11 +456,38 @@ static bool mal_vm_to_property_key_impl(
         vm, mal_value_from_string(string), key_out, atomize);
 }
 
-bool mal_vm_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
+// Spec ToPropertyKey (7.1.19): key = ? ToPrimitive(value, string); if it is a
+// Symbol return it, else return ? ToString(key). An object's @@toPrimitive,
+// valueOf or toString runs exactly once, so callers that convert a key a single
+// time (the reflective Object/Reflect builtins) observe correct coercion.
+// Returns false on an abrupt completion. Keys that are already indices, symbols
+// or atoms return before any frame; everything else converts out of line.
+static inline bool mal_vm_to_property_key_impl(
+    MalVm *vm, MalValue value, MalKey *key_out, bool atomize
+) {
+    if (mal_value_is_int32(value) && mal_value_to_i32(value) >= 0) {
+        *key_out = mal_key_index(mal_value_to_i32(value));
+        return true;
+    }
+    if (mal_value_is_string(value)) {
+        return mal_vm_string_to_property_key_impl(vm, value, key_out, atomize);
+    }
+    if (mal_value_is_symbol(value)) {
+        *key_out = (MalKey) {.kind = MAL_KEY_SYMBOL, .value = value};
+        return true;
+    }
+    return mal_vm_to_property_key_coerce(vm, value, key_out, atomize);
+}
+
+// One copy each: link-time inlining would copy the fast checks into every caller
+// for a few saved instructions, and the checks need no frame here.
+__attribute__((noinline)) bool mal_vm_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
     return mal_vm_to_property_key_impl(vm, value, key_out, true);
 }
 
-bool mal_vm_to_property_query(MalVm *vm, MalValue value, MalKey *key_out) {
+__attribute__((noinline)) bool mal_vm_to_property_query(
+    MalVm *vm, MalValue value, MalKey *key_out
+) {
     return mal_vm_to_property_key_impl(vm, value, key_out, false);
 }
 

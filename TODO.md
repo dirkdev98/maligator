@@ -471,13 +471,17 @@ distinct when measuring text work.
       repeated record/list/query routes with matched layout before changing admission.
 
 - [ ] Close the in-process Express gap. `bench/http/express-in-process.cjs` in raw mode
-      serves about 83k requests/s against Node's 188k, although sockets and parsing put
-      Maligator ahead in the HTTP benchmark. JavaScript frames hold about 80% of the
-      main thread; non-monomorphic property probes (primitive, own-table and missing
-      rows reached out of line) take about 13%, host streams 6%, RegExp 6% and closure
-      creation 4%. Per request the census counts about 12 store and 9 load IC
-      fallbacks and 44 dictionary-table lookups, three quarters of them misses.
-      `run --profile=compiler` on the benchmark lists the leading sites.
+      retires about 139k instructions per request against Node's 89k and Bun's 106k,
+      although sockets and parsing put Maligator ahead in the HTTP benchmark. Generated
+      JavaScript takes about 40k (router `next`, `layer.match`, content-type parsing,
+      `response.send`), property access about 33k, allocation and GC 7.6k, RegExp
+      7k and call dispatch 4.8k. Leads: `mal_vm_op_load_property_ic` saves six
+      register pairs and sets up a stack guard before its first check, likely from its
+      inlined `_impl` and a two-element roots array; the shared String method helper
+      pays a 176-byte frame and a stack guard on 34 calls per request; growing objects
+      allocate 5.7 slot arrays per request, and 24.5 of 36.9 grow calls do nothing;
+      Buffer encoding names cost about 250 instructions per lookup. Take loop counts
+      from production perf builds, since `--profile=compiler` plans no loop regions.
 
 - [ ] Bound remaining String and traversal costs before extending specialization:
       the reused-RegExp receiver check and matcher call, trimmed slices, numeric
@@ -583,6 +587,11 @@ distinct when measuring text work.
       `test` coverage and keep feature policy per image.
 
 ## Active correctness clusters
+
+- [ ] Convert a computed key once for the read and once for the write in compound
+      assignment. For `o[k] += 1`, current ECMAScript keeps the raw key in the
+      reference and converts it in both GetValue and PutValue, so Node calls
+      `k.toString()` twice; Maligator converts it once.
 
 - [ ] Resolve Intl locale availability and matching per service from bundled data.
       Preserve requested-locale order, lookup and best-fit semantics, relevant Unicode
