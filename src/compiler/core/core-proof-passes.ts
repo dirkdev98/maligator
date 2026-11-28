@@ -944,21 +944,109 @@ function scalarCandidateRepresentation(
 	return representation;
 }
 
+const NUMBER_UPDATE_OPERATORS: ReadonlySet<unknown> = new Set([
+	"+",
+	"tonumeric",
+	"increment",
+	"decrement",
+]);
+
+/** The boxed input of a `+`, ToNumeric, `++` or `--` with exact Number semantics. */
+function boxedNumberUpdateInput(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+): CoreValueId | undefined {
+	if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	if (
+		fn.instructionOpcodeName(definition) !== "unary" ||
+		!NUMBER_UPDATE_OPERATORS.has(fn.instructionAttributes(definition).operator)
+	)
+		return undefined;
+	const masks = coreExactOperatorInputKindMasks(fn, definition);
+	if (masks?.length !== 1 || masks[0] !== COMPILER_VALUE_KIND_NUMBER) return undefined;
+	const input = fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition));
+	return fn.valueRepresentation(input) === "boxed" ? input : undefined;
+}
+
+function localScalarCandidate(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	edgeUses: Uint8Array,
+): boolean {
+	return (
+		fn.valueRepresentation(value) === "boxed" &&
+		fn.kernel.valueDefinitionKind(value) === 1 &&
+		scalarProducer(fn, coreInstructionId(fn.kernel.valueDefinitionOwner(value))) &&
+		scalarConsumersOnly(fn, value, edgeUses)
+	);
+}
+
+/**
+ * Number updates of a boxed input whose results only leave through boxed boundaries,
+ * as in `{ value: value++ }` over a captured cell. Boxed, the update adds on the int32
+ * tag and converts only on overflow or a double input. An f64 representation would
+ * instead unbox the input and re-canonicalize the result at every boundary use.
+ */
+function boxedNumberUpdates(
+	fn: CoreFunctionStore,
+	edgeUses: Uint8Array,
+): ReadonlySet<CoreValueId> {
+	const updates = new Set<CoreValueId>();
+	for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
+		const value = coreValueId(valueIndex);
+		if (
+			fn.isValueLive(value) &&
+			fn.valueRepresentation(value) === "boxed" &&
+			boxedNumberUpdateInput(fn, value) !== undefined
+		)
+			updates.add(value);
+	}
+	const staysBoxed = (value: CoreValueId): boolean => {
+		const input = boxedNumberUpdateInput(fn, value)!;
+		if (!updates.has(input) && localScalarCandidate(fn, input, edgeUses)) return false;
+		if (edgeUses[value] !== 0) return false;
+		for (
+			let use = fn.kernel.valueFirstUse(value);
+			use >= 0;
+			use = fn.kernel.useNext(use)
+		) {
+			const instruction = fn.kernel.useInstruction(use);
+			if (
+				fn.instructionKind(instruction) === "operation" &&
+				!scalarBoundaryConsumer(fn, instruction, fn.kernel.useOperand(use)) &&
+				!(
+					fn.instructionOpcodeName(instruction) === "unary" &&
+					fn.kernel.instructionResultCount(instruction) === 1 &&
+					updates.has(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)))
+				)
+			)
+				return false;
+		}
+		return true;
+	};
+	for (let changed = updates.size > 0; changed;) {
+		changed = false;
+		for (const value of updates) {
+			if (staysBoxed(value)) continue;
+			updates.delete(value);
+			changed = true;
+		}
+	}
+	return updates;
+}
+
 function firstLocalScalarCandidate(
 	fn: CoreFunctionStore,
 	edgeUses: Uint8Array,
 ): CoreValueId | undefined {
+	let updates: ReadonlySet<CoreValueId> | undefined;
 	for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
 		const value = coreValueId(valueIndex);
-		if (
-			!fn.isValueLive(value) ||
-			fn.valueRepresentation(value) !== "boxed" ||
-			fn.kernel.valueDefinitionKind(value) !== 1
-		)
-			continue;
-		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-		if (scalarProducer(fn, definition) && scalarConsumersOnly(fn, value, edgeUses))
-			return value;
+		if (!fn.isValueLive(value) || !localScalarCandidate(fn, value, edgeUses)) continue;
+		if (boxedNumberUpdateInput(fn, value) === undefined) return value;
+		updates ??= boxedNumberUpdates(fn, edgeUses);
+		if (!updates.has(value)) return value;
 	}
 	return undefined;
 }
@@ -989,6 +1077,7 @@ function materializePreparedLocalScalars(
 	first: CoreValueId,
 ) {
 	const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+	let updates: ReadonlySet<CoreValueId> | undefined;
 	const candidates: Array<{
 		readonly value: CoreValueId;
 		readonly representation: CoreRepresentation;
@@ -998,11 +1087,10 @@ function materializePreparedLocalScalars(
 		if (
 			value !== first &&
 			(!fn.isValueLive(value) ||
-				fn.valueRepresentation(value) !== "boxed" ||
 				kinds.scalarKind(value) === undefined ||
-				fn.kernel.valueDefinitionKind(value) !== 1 ||
-				!scalarProducer(fn, coreInstructionId(fn.kernel.valueDefinitionOwner(value))) ||
-				!scalarConsumersOnly(fn, value, edgeUses))
+				!localScalarCandidate(fn, value, edgeUses) ||
+				(boxedNumberUpdateInput(fn, value) !== undefined &&
+					(updates ??= boxedNumberUpdates(fn, edgeUses)).has(value)))
 		)
 			continue;
 		const representation = scalarCandidateRepresentation(fn, value, kinds);

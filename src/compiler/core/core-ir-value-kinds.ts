@@ -53,7 +53,10 @@ import {
 	coreBuiltinCallInput,
 	coreBuiltinResultProjection,
 } from "./core-builtin-result-projections.ts";
-import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
+import {
+	coreClosedGlobalSlotMembership,
+	coreInitializedCapturedReadMembership,
+} from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { analyzeCoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
@@ -1811,6 +1814,337 @@ function integerWorkRecorder(
 		: (values) => recordResult({ integerValues: values });
 }
 
+/** Captured cells that hold a Number once initialized, for reads that cannot precede that. */
+export interface CoreNumericCapturedCells {
+	loadIsNumber(fn: CoreFunctionStore, load: CoreInstructionId): boolean;
+}
+
+/** A store keeps its cell numeric when every listed cell is numeric; `null` never does. */
+interface CapturedNumberStore {
+	readonly cell: string;
+	readonly requires: ReadonlyArray<string> | null;
+}
+
+/** One function's part of the proof. A rescan with equal content keeps the old object. */
+interface CapturedNumberContribution {
+	readonly dynamicScope: boolean;
+	readonly aliased: ReadonlyArray<string>;
+	readonly stores: ReadonlyArray<CapturedNumberStore>;
+}
+
+interface CapturedNumberScan {
+	readonly bodyVersion: number;
+	readonly initializedReads: ReadonlySet<string>;
+	readonly contribution: CapturedNumberContribution;
+}
+
+interface NumericCapturedCellProof {
+	readonly initializedReads: ReadonlySet<string>;
+	readonly contributions: ReadonlyArray<CapturedNumberContribution>;
+	readonly cells: CoreNumericCapturedCells;
+}
+
+const NO_NUMERIC_CAPTURED_CELLS: CoreNumericCapturedCells = Object.freeze({
+	loadIsNumber: () => false,
+});
+const NUMBER_PRESERVING_UNARY_OPERATORS: ReadonlySet<string> = new Set([
+	"increment",
+	"decrement",
+	"-",
+	"~",
+	"tonumeric",
+]);
+const NUMBER_PRESERVING_BINARY_OPERATORS: ReadonlySet<string> = new Set([
+	"+",
+	"-",
+	"*",
+	"/",
+	"%",
+	"**",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+]);
+const NO_CAPTURED_NUMBER_CONTRIBUTION: CapturedNumberContribution = Object.freeze({
+	dynamicScope: false,
+	aliased: [],
+	stores: [],
+});
+// Any body edit in the program invalidates the proof, and the optimizer edits often. An
+// unchanged body keeps its scan, and unchanged contributions keep the previous proof.
+const capturedNumberScans = new WeakMap<CoreFunctionStore, CapturedNumberScan>();
+const numericCapturedCellProofs = new WeakMap<CoreProgram, NumericCapturedCellProof>();
+
+function sameStrings(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
+	return (
+		left.length === right.length && left.every((value, index) => value === right[index])
+	);
+}
+
+function sameCapturedNumberContribution(
+	left: CapturedNumberContribution,
+	right: CapturedNumberContribution,
+): boolean {
+	return (
+		left.dynamicScope === right.dynamicScope &&
+		sameStrings(left.aliased, right.aliased) &&
+		left.stores.length === right.stores.length &&
+		left.stores.every((store, index) => {
+			const other = right.stores[index]!;
+			return (
+				store.cell === other.cell &&
+				(store.requires === null || other.requires === null
+					? store.requires === other.requires
+					: sameStrings(store.requires, other.requires))
+			);
+		})
+	);
+}
+
+function capturedCellKey(fn: CoreFunctionStore, instruction: CoreInstructionId): string {
+	const attributes = fn.instructionAttributes(instruction);
+	return `${attributes.functionIndex as number}:${attributes.index as number}`;
+}
+
+function capturedLoadInitialized(
+	fn: CoreFunctionStore,
+	load: CoreInstructionId,
+	initializedReads: ReadonlySet<string>,
+): boolean {
+	return initializedReads.has(`${fn.id}:${capturedCellKey(fn, load)}`);
+}
+
+function isCapturedEmptyInitialization(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+): boolean {
+	if (fn.kernel.valueDefinitionKind(value) !== 1) return false;
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	const opcode = fn.instructionOpcodeName(definition);
+	if (opcode === "createEmpty") return true;
+	return (
+		opcode === "move" &&
+		isCapturedEmptyInitialization(
+			fn,
+			fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition)),
+		)
+	);
+}
+
+/**
+ * The cells a stored value's Number result depends on, or `null` when no cell
+ * proof can make it a Number. Reads that may precede initialization see the TDZ
+ * marker or `undefined`, so only initialized reads can contribute a Number.
+ */
+function capturedNumberRequirements(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	initializedReads: ReadonlySet<string>,
+	memo: Map<CoreValueId, ReadonlyArray<string> | null>,
+): ReadonlyArray<string> | null {
+	const known = memo.get(value);
+	if (known !== undefined) return known;
+	// Instruction results form a DAG; parameters and block parameters stay unproven.
+	let result: ReadonlyArray<string> | null = null;
+	if (fn.kernel.valueDefinitionKind(value) === 1) {
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		const opcode = fn.instructionOpcodeName(definition);
+		const operand = (index: number) =>
+			capturedNumberRequirements(
+				fn,
+				fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition) + index),
+				initializedReads,
+				memo,
+			);
+		const attributes = fn.instructionAttributes(definition);
+		const operator = attributes.operator;
+		if (staticOpcodeKind(opcode) === COMPILER_VALUE_KIND_NUMBER) result = [];
+		else if (opcode === "move") result = operand(0);
+		else if (opcode === "loadCaptured")
+			result = capturedLoadInitialized(fn, definition, initializedReads)
+				? [capturedCellKey(fn, definition)]
+				: null;
+		else if (opcode === "loadPropertyStatic")
+			result =
+				attributes.exactArrayLength === true || attributes.primitiveStringLength === true
+					? []
+					: null;
+		else if (opcode === "unary" && typeof operator === "string")
+			// ToNumber rejects a BigInt, so unary plus is a Number whenever it completes.
+			result =
+				operator === "+"
+					? []
+					: NUMBER_PRESERVING_UNARY_OPERATORS.has(operator)
+						? operand(0)
+						: null;
+		else if (opcode === "binary" && typeof operator === "string") {
+			if (operator === ">>>") result = [];
+			else if (NUMBER_PRESERVING_BINARY_OPERATORS.has(operator)) {
+				const left = operand(0);
+				const right = left === null ? null : operand(1);
+				result = left === null || right === null ? null : [...left, ...right];
+			}
+		} else if (
+			opcode === "callKnown" &&
+			attributes.construct !== true &&
+			typeof attributes.operation === "string" &&
+			builtinNormalResultKinds(attributes.operation) === COMPILER_VALUE_KIND_NUMBER
+		)
+			result = [];
+	}
+	memo.set(value, result);
+	return result;
+}
+
+function scanCapturedNumberStores(
+	fn: CoreFunctionStore,
+	initializedReads: ReadonlySet<string>,
+): CapturedNumberContribution {
+	// An open editor's edits move no version until it commits.
+	const bodyVersion = fn.hasActiveEditor ? undefined : fn.version("body");
+	const cached = capturedNumberScans.get(fn);
+	const previous = cached?.initializedReads === initializedReads ? cached : undefined;
+	if (previous !== undefined && previous.bodyVersion === bodyVersion)
+		return previous.contribution;
+	const scanned = capturedNumberContribution(fn, initializedReads);
+	const contribution =
+		previous !== undefined &&
+		sameCapturedNumberContribution(previous.contribution, scanned)
+			? previous.contribution
+			: scanned;
+	if (bodyVersion !== undefined)
+		capturedNumberScans.set(fn, { bodyVersion, initializedReads, contribution });
+	return contribution;
+}
+
+function capturedNumberContribution(
+	fn: CoreFunctionStore,
+	initializedReads: ReadonlySet<string>,
+): CapturedNumberContribution {
+	let dynamicScope = false;
+	const aliased = fn.metadata.mappedArgumentSlots
+		.filter((index) => index >= 0)
+		.map((index) => `${fn.id}:${index}`);
+	const stores: Array<CapturedNumberStore> = [];
+	const memo = new Map<CoreValueId, ReadonlyArray<string> | null>();
+	for (const instruction of fn.instructionIds()) {
+		const header = fn.instructionHeader(instruction);
+		if (typeof header === "string") continue;
+		const opcode = header.opcode;
+		if (opcode.startsWith("with")) dynamicScope = true;
+		else if (opcode === "createPrivateNames") {
+			const attributes = fn.instructionAttributes(instruction);
+			for (const index of attributes.capturedIndices as ReadonlyArray<number>)
+				aliased.push(`${attributes.functionIndex as number}:${index}`);
+		} else if (opcode === "storeCaptured") {
+			const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+			if (isCapturedEmptyInitialization(fn, value)) continue;
+			stores.push({
+				cell: capturedCellKey(fn, instruction),
+				requires: capturedNumberRequirements(fn, value, initializedReads, memo),
+			});
+		}
+	}
+	return !dynamicScope && aliased.length === 0 && stores.length === 0
+		? NO_CAPTURED_NUMBER_CONTRIBUTION
+		: { dynamicScope, aliased, stores };
+}
+
+/**
+ * Prove captured cells whose every store holds a Number, assuming the same of
+ * the cells those stores read and dropping cells until the assumption holds.
+ * A closed source exposes every store as Core `storeCaptured`, apart from
+ * mapped arguments, private-name slots and `with` scopes, which disqualify.
+ * Before its first store a cell holds the TDZ marker or `undefined`; neither is
+ * a heap value, and initialized reads never observe them.
+ */
+export function analyzeCoreNumericCapturedCells(
+	program: CoreProgram,
+	context: CoreCompilationContext,
+): CoreNumericCapturedCells {
+	if (context.facts.closure.sourceClosure.kind !== "known")
+		return NO_NUMERIC_CAPTURED_CELLS;
+	const initializedReads = coreInitializedCapturedReadMembership(context);
+	if (initializedReads.size === 0) return NO_NUMERIC_CAPTURED_CELLS;
+	const contributions: Array<CapturedNumberContribution> = [];
+	for (const functionId of program.functionIds())
+		contributions.push(
+			scanCapturedNumberStores(program.function(functionId), initializedReads),
+		);
+	const previous = numericCapturedCellProofs.get(program);
+	if (
+		previous?.initializedReads === initializedReads &&
+		previous.contributions.length === contributions.length &&
+		previous.contributions.every(
+			(contribution, index) => contribution === contributions[index],
+		)
+	)
+		return previous.cells;
+	const cells = proveNumericCapturedCells(contributions, initializedReads);
+	numericCapturedCellProofs.set(program, { initializedReads, contributions, cells });
+	return cells;
+}
+
+function proveNumericCapturedCells(
+	contributions: ReadonlyArray<CapturedNumberContribution>,
+	initializedReads: ReadonlySet<string>,
+): CoreNumericCapturedCells {
+	const aliased = new Set<string>();
+	const stores = new Map<string, Array<ReadonlyArray<string>>>();
+	const rejected = new Set<string>();
+	for (const scan of contributions) {
+		if (scan.dynamicScope) return NO_NUMERIC_CAPTURED_CELLS;
+		for (const cell of scan.aliased) aliased.add(cell);
+		for (const store of scan.stores) {
+			if (store.requires === null) rejected.add(store.cell);
+			else {
+				const cellStores = stores.get(store.cell) ?? [];
+				cellStores.push(store.requires);
+				stores.set(store.cell, cellStores);
+			}
+		}
+	}
+	const numeric = new Set<string>();
+	for (const cell of stores.keys())
+		if (!rejected.has(cell) && !aliased.has(cell)) numeric.add(cell);
+	for (let changed = true; changed;) {
+		changed = false;
+		for (const cell of numeric)
+			if (
+				stores
+					.get(cell)!
+					.some((requires) => requires.some((source) => !numeric.has(source)))
+			) {
+				numeric.delete(cell);
+				changed = true;
+			}
+	}
+	if (numeric.size === 0) return NO_NUMERIC_CAPTURED_CELLS;
+	return Object.freeze({
+		loadIsNumber(fn: CoreFunctionStore, load: CoreInstructionId) {
+			return (
+				fn.instructionOpcodeName(load) === "loadCaptured" &&
+				numeric.has(capturedCellKey(fn, load)) &&
+				capturedLoadInitialized(fn, load, initializedReads)
+			);
+		},
+	});
+}
+
+export const CORE_NUMERIC_CAPTURED_CELL_ANALYSIS: CoreAnalysisDefinition<CoreNumericCapturedCells> =
+	{
+		key: "numeric-captured-cells",
+		scope: "program",
+		programDependencies: ["functions"],
+		programFunctionDependencies: ["body"],
+		contextIdentity: (context) => context,
+		compute({ program, context }) {
+			return analyzeCoreNumericCapturedCells(program, context);
+		},
+	};
+
 export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKindAnalysis> =
 	{
 		key: "local-value-kinds",
@@ -1845,9 +2179,16 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 				) !== undefined
 					? COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED
 					: undefined;
+			let numericCells: CoreNumericCapturedCells | undefined;
 			const operationResultMask = (instruction: CoreInstructionId) => {
 				const opcode = fn.instructionOpcodeName(instruction);
 				if (opcode === "loadPrivate") return fields?.readMask(fn, instruction);
+				if (opcode === "loadCaptured")
+					return (numericCells ??= get(CORE_NUMERIC_CAPTURED_CELL_ANALYSIS, {
+						scope: "program",
+					})).loadIsNumber(fn, instruction)
+						? COMPILER_VALUE_KIND_NUMBER
+						: undefined;
 				if (opcode !== "loadProperty") return undefined;
 				return (numericArrayLoads ??= corePrivateNumericArrayLoads(
 					program,

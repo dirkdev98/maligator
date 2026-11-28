@@ -904,6 +904,7 @@ describe("Core local proofs and representations", () => {
 			attributes: { nameStringIndex: 0 },
 			outputCount: 0,
 		});
+		builder.appendInstruction(entry, "rootUse", [incremented!], { outputCount: 0 });
 		builder.setTerminator(entry, { kind: "return", value: incremented! });
 		const finished = builder.finish(entry);
 		const fn = program.function(finished.function);
@@ -920,6 +921,48 @@ describe("Core local proofs and representations", () => {
 		expect(fn.valueRepresentation(numeric!)).toBe("f64");
 		expect(fn.valueRepresentation(incremented!)).toBe("f64");
 		expect(fn.valueRepresentation(remainder!)).toBe("f64");
+	});
+
+	it("keeps a Number update of a boxed input boxed when only boxed boundaries use it", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 2 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [source] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [numeric] = builder.appendInstruction(entry, "unary", [source!], {
+			attributes: { operator: "tonumeric" },
+		});
+		const [incremented] = builder.appendInstruction(entry, "unary", [numeric!], {
+			attributes: { operator: "increment" },
+		});
+		builder.appendInstruction(entry, "storeGlobal", [numeric!], {
+			attributes: { index: 0 },
+			outputCount: 0,
+		});
+		builder.appendInstruction(entry, "storeGlobal", [incremented!], {
+			attributes: { index: 1 },
+			outputCount: 0,
+		});
+		builder.appendInstruction(entry, "storeGlobalProperty", [source!], {
+			attributes: { nameStringIndex: 0 },
+			outputCount: 0,
+		});
+		builder.setTerminator(entry, { kind: "return", value: incremented! });
+		const finished = builder.finish(entry);
+		const fn = program.function(finished.function);
+		const report = new CoreOptimizationReportBuilder(program);
+		const analyses = new CoreAnalysisManager(program, context, report);
+		new CoreFunctionPassScheduler(
+			program,
+			context,
+			analyses,
+			report,
+			finished.function,
+		).runComponent("proofs", CORE_PROOF_PASSES);
+		expect(fn.valueRepresentation(source!)).toBe("boxed");
+		expect(fn.valueRepresentation(numeric!)).toBe("boxed");
+		expect(fn.valueRepresentation(incremented!)).toBe("boxed");
 	});
 
 	it("converts independent scalar flows while preserving a component with a boxed consumer", () => {

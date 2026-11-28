@@ -128,6 +128,16 @@ static generated-code size and helper counts do not establish runtime cost.
       element's number check: 15 ARM64 instructions per element in a summing loop, where
       the f64-counter path keeps them in registers and needs 14.
 
+- [ ] Give direct native entries the Number kind of captured cells. `analyzeCoreNativeEntry`
+      in `core-ir-region-selection.ts` builds its own kind inputs, so a closure with an
+      f64-parameter direct entry still reads and updates its Number-only cells through
+      the generic unary helper, while the same closure without one adds on the int32 tag.
+
+- [ ] Give `x += 1` and `x -= 1` on a boxed Number the int32-tag path that `++` and `--`
+      take. The small constant gets a scalar representation, so the existing boxed
+      `mal_ops_add_numbers` path does not apply and the update unboxes to f64 and
+      re-canonicalizes at every boxed use.
+
 - [ ] Serve call sites with a different argument signature without boxing. Region
       selection gives each function one scalar entry, chosen by call weight, and counts
       a missing argument as boxed. For `function scale(values, k = 1)`, `scale(values, 2)`
@@ -281,6 +291,13 @@ Runtime eval may remove source closure without invalidating authority closure.
       discovery, rejected candidates and nested queries, with conservative fallback on
       exhaustion. Add only counters needed to prove limits and require end-to-end evidence
       before narrowing indexes or growing caches.
+
+- [ ] Recompute program-scope analyses from the functions whose bodies changed. Any
+      body edit invalidates them, so the numeric captured-cell proof recomputes about
+      2,100 times in a cold Express compile and walks every function each time, even
+      though unchanged bodies reuse their scan. A store-level body-change log would let
+      it visit only edited functions; the walk costs about 1.5% of cold Express compile
+      instructions (indicative, measured under load).
 
 ## Iteration and loop regions
 

@@ -16550,6 +16550,28 @@ class NativeInstructionEmission {
 			const text = `mal_value_from_string(mal_ops_to_string(&vm->heap, ${this.boxed(src)}))`;
 			return [`r${dst} = ${this.callValue(dst, text)};`, this.poll()];
 		}
+		// A boxed Number stays boxed: `++` and `--` add on the int32 tag and leave the
+		// int32 range or a double input to the f64 step.
+		if (
+			this.reps[src] === "boxed" &&
+			this.reps[dst] === "boxed" &&
+			this.context.facts?.inputKindMasks?.length === 1 &&
+			this.context.facts.inputKindMasks[0] === COMPILER_VALUE_KIND_NUMBER
+		) {
+			const value = this.boxed(src);
+			if (operator === "+" || operator === "tonumeric") return [`r${dst} = ${value};`];
+			if (operator === "increment" || operator === "decrement") {
+				const [sign, limit] =
+					operator === "increment" ? ["+", "INT32_MAX"] : ["-", "INT32_MIN"];
+				const step = this.profileCall(
+					"boxing",
+					`mal_ops_number_value(mal_ops_number_as_f64(${value}) ${sign} 1.0)`,
+				);
+				return [
+					`r${dst} = mal_value_is_int32(${value}) && mal_value_to_i32(${value}) != ${limit} ? mal_value_from_i32(mal_value_to_i32(${value}) ${sign} 1) : ${step};`,
+				];
+			}
+		}
 		if (
 			this.context.facts?.inputKindMasks !== undefined &&
 			this.context.facts.inputKindMasks.length === 1 &&
