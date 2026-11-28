@@ -3097,23 +3097,80 @@ bool mal_vm_inherited_stub_try_load_static(
 }
 
 static bool mal_ic_key_is_stable_string(MalValue key);
+
+/**
+ * The shared stub's row for `key_value` on the object's shape, or null. A computed-key
+ * site restarts its row on every new key and never becomes megamorphic, so a key
+ * other than the row's probes the stub as well; the row's own key declines at once.
+ */
+static inline __attribute__((always_inline)) const MalPropertyStubEntry *mal_vm_load_stub_probe(
+    const MalPropertyStubEntry *cache, const MalObject *object, MalValue key_value,
+    const MalInlineCache *ic
+) {
+    if (!ic->megamorphic && key_value == ic->key) return nullptr;
+    const MalPropertyStubEntry *e = &cache[mal_stub_hash(object->shape, key_value)];
+    return e->shape == object->shape && e->key == key_value ? e : nullptr;
+}
+
+static __attribute__((noinline)) MalValue mal_vm_load_stub_adopt(
+    MalInlineCache *ic, const MalObject *object, MalValue key_value, u32 slot
+) {
+    mal_vm_record_own_slot(ic, object->shape, key_value, slot);
+    return mal_object_field_load(object, slot);
+}
+
+/**
+ * The value of a stub row hit. The row adoption leaves through a tail call, so a caller
+ * that returns this needs no frame for the hit.
+ */
+static inline __attribute__((always_inline)) MalValue mal_vm_load_stub_hit(
+    MalInlineCache *ic, const MalObject *object, MalValue key_value, const MalPropertyStubEntry *e
+) {
+    MAL_PERF_COUNT(ic_load_mega_hits);
+    // A computed-key site adopts a key on its second consecutive stub hit, so
+    // a site cycling between keys keeps its row while a new phase still
+    // moves the row. A real-slot shape row leaves `value` free to remember
+    // the candidate; stable keys make the identity comparison ABA-safe.
+    if (mal_ic_key_is_stable_string(key_value) &&
+        (ic->megamorphic || ic->value == key_value)) {
+        return mal_vm_load_stub_adopt(ic, object, key_value, e->slot);
+    }
+    if (ic->mode == MAL_IC_MODE_SHAPE) ic->value = key_value;
+    return mal_object_field_load(object, e->slot);
+}
+
 static inline bool mal_vm_load_stub_try(
-    MalVm *vm, const MalObject *object, MalValue key_value, MalInlineCache *ic, MalValue *out);
+    MalVm *vm, const MalObject *object, MalValue key_value, MalInlineCache *ic, MalValue *out
+) {
+    // The row's own key declines before the stub cache is first allocated.
+    if (!ic->megamorphic && key_value == ic->key) return false;
+    const MalPropertyStubEntry *e =
+        mal_vm_load_stub_probe(mal_vm_property_stub_cache(vm), object, key_value, ic);
+    if (e == nullptr) return false;
+    *out = mal_vm_load_stub_hit(ic, object, key_value, e);
+    return true;
+}
+
+// Out of line so that a stub hit in `mal_vm_indexed_load_keyed` returns without a frame.
+static __attribute__((noinline)) MalValue mal_vm_indexed_load_keyed_full(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
+) {
+    return mal_vm_indexed_fast_load_full(vm, object_value, key_value, ic);
+}
 
 MalValue mal_vm_indexed_load_keyed(
     MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
 ) {
     // Keys cycling through one record miss the site's row on most reads; answer them
     // from the shared stub, which holds only stable names, before the complete load.
-    // The stub probe declines at once when the row holds this key.
-    MalValue value;
     if (vm->property_stub != nullptr && mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT) &&
-        mal_ic_key_is_stable_string(key_value) &&
-        mal_vm_load_stub_try(
-            vm, (const MalObject *) mal_value_to_heap(object_value), key_value, ic, &value)) {
-        return value;
+        mal_ic_key_is_stable_string(key_value)) {
+        const MalObject *object = (const MalObject *) mal_value_to_heap(object_value);
+        const MalPropertyStubEntry *e =
+            mal_vm_load_stub_probe(vm->property_stub, object, key_value, ic);
+        if (e != nullptr) return mal_vm_load_stub_hit(ic, object, key_value, e);
     }
-    return mal_vm_indexed_fast_load_full(vm, object_value, key_value, ic);
+    return mal_vm_indexed_load_keyed_full(vm, object_value, key_value, ic);
 }
 
 bool mal_vm_array_try_get_absent_index(const MalArrayObject *arr, MalValue *out) {
@@ -4534,9 +4591,16 @@ bool mal_op_call_known_math(MalCallable *callable, const MalInstruction *instruc
 }
 #endif
 
+static __attribute__((noinline)) MalValue mal_vm_call_known_native_general(
+    MalVm *vm, MalNativeFunctionCallback callback, i32 operation, MalValue receiver,
+    const MalValue *args, i32 count, i32 flags
+);
+
+// The calls of a loaded primordial return before the general path's rooted frame,
+// which is out of line so that they do not save its registers or guard its buffers.
 MalValue mal_vm_call_known_native(MalVm *vm, MalNativeFunctionCallback callback, i32 operation, MalValue receiver, const MalValue *args, i32 count, i32 flags) {
-    const i32 *nodes = mal_known_operation_nodes;
 #if !MAL_REALMS
+    const i32 *nodes = mal_known_operation_nodes;
     // A plain call to a loaded primordial cannot collect before the exact call roots
     // its own operands, so it needs neither this frame's roots nor its value stack.
     // Interpreted calls pass no callback; a native primordial supplies its own.
@@ -4564,6 +4628,14 @@ MalValue mal_vm_call_known_native(MalVm *vm, MalNativeFunctionCallback callback,
         }
     }
 #endif
+    return mal_vm_call_known_native_general(vm, callback, operation, receiver, args, count, flags);
+}
+
+static __attribute__((noinline)) MalValue mal_vm_call_known_native_general(
+    MalVm *vm, MalNativeFunctionCallback callback, i32 operation, MalValue receiver,
+    const MalValue *args, i32 count, i32 flags
+) {
+    const i32 *nodes = mal_known_operation_nodes;
     i32 mode = flags >> 1;
     bool construct = (flags & 1) != 0;
     if (operation < 0 || operation >= MAL_KNOWN_OPERATION_COUNT || flags < 0 || flags > 9 || (mode != 0 && count < 1)) {
@@ -5538,6 +5610,21 @@ MalValue mal_vm_in_operator(MalVm *vm, MalValue left, MalValue right) {
     return mal_value_new_boolean(present);
 }
 
+// Out of line so that the operations above it neither guard nor save registers for its roots.
+static __attribute__((noinline)) MalValue mal_vm_binary_op_coerced(
+    MalVm *vm, MalBinaryOp op, MalValue left, MalValue right
+) {
+    // A fresh primitive from the first coercion must survive the second coercion's reentry.
+    MalValue operands[] = {left, right};
+    MalRootSpan span;
+    mal_gc_root(&span, operands, countof(operands));
+    MalValue result = mal_vm_binary_coerce_operands(vm, op, &operands[0], &operands[1])
+        ? mal_vm_binary_dispatch(vm, op, operands[0], operands[1])
+        : MAL_VALUE_UNDEFINED;
+    mal_gc_unroot(&span);
+    return result;
+}
+
 MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right) {
     if (mal_ops_is_number(left) && mal_ops_is_number(right)) {
         return mal_vm_binary_dispatch(vm, op, left, right);
@@ -5553,16 +5640,7 @@ MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue rig
             return concatenated;
         }
     }
-
-    // A fresh primitive from the first coercion must survive the second coercion's reentry.
-    MalValue operands[] = {left, right};
-    MalRootSpan span;
-    mal_gc_root(&span, operands, countof(operands));
-    MalValue result = mal_vm_binary_coerce_operands(vm, op, &operands[0], &operands[1])
-        ? mal_vm_binary_dispatch(vm, op, operands[0], operands[1])
-        : MAL_VALUE_UNDEFINED;
-    mal_gc_unroot(&span);
-    return result;
+    return mal_vm_binary_op_coerced(vm, op, left, right);
 }
 
 __attribute__((noinline)) MalValue mal_vm_add_number_left(MalVm *vm, f64 left, MalValue right) {
@@ -7996,30 +8074,6 @@ static void mal_ic_try_record_inherited(
     MAL_PERF_COUNT(ic_inherited_fills);
 }
 
-// A computed-key site restarts its row on every new key and never becomes
-// megamorphic, so a key other than the row's probes the stub as well.
-static inline bool mal_vm_load_stub_try(
-    MalVm *vm, const MalObject *object, MalValue key_value, MalInlineCache *ic, MalValue *out
-) {
-    if (!ic->megamorphic && key_value == ic->key) return false;
-    const MalPropertyStubEntry *e =
-        &mal_vm_property_stub_cache(vm)[mal_stub_hash(object->shape, key_value)];
-    if (e->shape != object->shape || e->key != key_value) return false;
-    MAL_PERF_COUNT(ic_load_mega_hits);
-    // A computed-key site adopts a key on its second consecutive stub hit, so
-    // a site cycling between keys keeps its row while a new phase still
-    // moves the row. A real-slot shape row leaves `value` free to remember
-    // the candidate; stable keys make the identity comparison ABA-safe.
-    if (mal_ic_key_is_stable_string(key_value) &&
-        (ic->megamorphic || ic->value == key_value)) {
-        mal_vm_record_own_slot(ic, object->shape, key_value, e->slot);
-    } else if (ic->mode == MAL_IC_MODE_SHAPE) {
-        ic->value = key_value;
-    }
-    *out = mal_object_field_load(object, e->slot);
-    return true;
-}
-
 // Receivers alternating between classes would otherwise re-register the row on every miss.
 #define MAL_ACCESSOR_PROBE_REFILL_LIMIT 4
 
@@ -8503,29 +8557,11 @@ static MalTable *mal_vm_dictionary_receiver_table(MalValue object_value, MalValu
         ? mal_object_overflow(object) : nullptr;
 }
 
-MalValue MAL_PROFILE_PROPERTY_LOAD_HELPER(mal_vm_op_load_property_ic)(
+// Out of line with the rooted slow path, which would otherwise give the stub hits a frame.
+static __attribute__((noinline)) MalValue mal_vm_op_load_property_ic_uncached(
     MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
     MAL_PROFILE_PROPERTY_LOAD_SITE
 ) {
-    // Index strings such as for-in keys over an array name the same elements as numbers.
-    u32 index;
-    MalValue element;
-    if (mal_value_is_string(key_value) &&
-        mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT) &&
-        mal_vm_string_to_array_index(mal_value_to_string(key_value), &index) &&
-        mal_vm_array_try_get_proven_index(
-            (const MalArrayObject *) mal_value_to_heap(object_value), index, &element)) {
-        MAL_PERF_COUNT(ic_load_index_string_hits);
-        return element;
-    }
-    // Stub rows are keyed by atom identity, so any other string merely misses and a
-    // hit needs neither key conversion nor rooting.
-    MalObject *slot_object = mal_value_is_string(key_value) && vm->property_stub != nullptr
-        ? mal_vm_as_own_slot_object(object_value) : nullptr;
-    MalValue stub_value;
-    if (slot_object != nullptr && mal_vm_load_stub_try(vm, slot_object, key_value, ic, &stub_value)) {
-        return stub_value;
-    }
     // A cacheable key at a cold or same-key site fills and keeps the entry-hinted
     // own-table row; keys the site cannot cache, or one varying past its row, probe directly.
     bool cacheable = mal_ic_key_is_stable_string(key_value) &&
@@ -8541,6 +8577,51 @@ MalValue MAL_PROFILE_PROPERTY_LOAD_HELPER(mal_vm_op_load_property_ic)(
     }
     return mal_vm_op_load_property_ic_impl(
         vm, object_value, key_value, ic, false MAL_PROFILE_PROPERTY_LOAD_ARG(profile_site_id));
+}
+
+/**
+ * An array receiver's string key that may name an element: index strings, such as for-in
+ * keys over an array, name the same elements as numbers. A key that reads no element here,
+ * including a name on its first, memoizing rejection, skips the stub for the complete
+ * load, which answers it as well.
+ */
+static __attribute__((noinline)) MalValue mal_vm_op_load_property_ic_array_index(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
+    MAL_PROFILE_PROPERTY_LOAD_SITE
+) {
+    u32 index;
+    MalValue element;
+    if (mal_vm_string_to_array_index(mal_value_to_string(key_value), &index) &&
+        mal_vm_array_try_get_proven_index(
+            (const MalArrayObject *) mal_value_to_heap(object_value), index, &element)) {
+        MAL_PERF_COUNT(ic_load_index_string_hits);
+        return element;
+    }
+    return mal_vm_op_load_property_ic_uncached(
+        vm, object_value, key_value, ic MAL_PROFILE_PROPERTY_LOAD_ARG(profile_site_id));
+}
+
+MalValue MAL_PROFILE_PROPERTY_LOAD_HELPER(mal_vm_op_load_property_ic)(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
+    MAL_PROFILE_PROPERTY_LOAD_SITE
+) {
+    // The index parse takes an out-parameter, and so a frame; a name whose rejection is
+    // memoized goes straight to the stub.
+    if (mal_value_is_string(key_value) &&
+        mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT) &&
+        !mal_value_to_string(key_value)->array_index_impossible) {
+        return mal_vm_op_load_property_ic_array_index(
+            vm, object_value, key_value, ic MAL_PROFILE_PROPERTY_LOAD_ARG(profile_site_id));
+    }
+    // Stub rows are keyed by atom identity, so any other string merely misses and a
+    // hit needs neither key conversion nor rooting.
+    const MalObject *object = mal_value_is_string(key_value) && vm->property_stub != nullptr
+        ? mal_vm_as_own_slot_object(object_value) : nullptr;
+    const MalPropertyStubEntry *e = object != nullptr
+        ? mal_vm_load_stub_probe(vm->property_stub, object, key_value, ic) : nullptr;
+    if (e != nullptr) return mal_vm_load_stub_hit(ic, object, key_value, e);
+    return mal_vm_op_load_property_ic_uncached(
+        vm, object_value, key_value, ic MAL_PROFILE_PROPERTY_LOAD_ARG(profile_site_id));
 }
 
 #if MAL_PROFILE && MAL_PERF_STATS

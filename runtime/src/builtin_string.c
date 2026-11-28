@@ -1769,6 +1769,38 @@ bool mal_builtin_string_span_character(
     return true;
 }
 
+static inline f64 mal_builtin_string_search_offset(MalValue position, MalStringSearchOp operation) {
+    if (!mal_value_is_undefined(position)) return mal_ops_to_number(position);
+    return operation == MAL_STRING_SEARCH_ENDS_WITH || operation == MAL_STRING_SEARCH_LAST_INDEX_OF
+        ? INFINITY : 0;
+}
+
+/**
+ * The search for a primitive needle other than a string, which converts and may allocate.
+ * Out of line so a string needle's search keeps no rooted operands. Returns false with
+ * `out` undefined when the conversion threw.
+ */
+static __attribute__((noinline)) bool mal_builtin_string_span_search_coerced(
+    MalVm *vm, MalValue subject, usize start, usize end, MalValue needle, MalValue position,
+    MalStringSearchOp operation, MalValue *out
+) {
+    MalValue roots[3] = {subject, needle, position};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    *out = MAL_VALUE_UNDEFINED;
+    MalString *search = mal_builtin_string_coerce(vm, roots[1]);
+    bool converted = vm->completion.kind != MAL_COMPLETION_THROW;
+    if (converted) {
+        roots[1] = mal_value_from_string(search);
+        // Primitive needle conversion precedes position conversion even when it allocates.
+        *out = mal_builtin_string_search_impl(mal_value_to_string(roots[0]), start, end,
+            mal_value_to_string(roots[1]), mal_builtin_string_search_offset(roots[2], operation),
+            operation);
+    }
+    mal_gc_unroot(&span);
+    return converted;
+}
+
 bool mal_builtin_string_span_search(
     MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
     MalValue needle, MalValue position, MalStringSearchOp operation, MalValue *out
@@ -1791,24 +1823,14 @@ bool mal_builtin_string_span_search(
         end > mal_string_length(mal_value_to_string(subject)) ||
         mal_value_is_object(needle) || mal_value_is_symbol(needle) ||
         mal_value_is_object(position) || mal_value_is_symbol(position) || mal_value_is_bigint(position)) return false;
-    MalValue roots[3] = {subject, needle, position};
-    MalRootSpan span;
-    bool converting = !mal_value_is_string(needle);
-    if (converting) mal_gc_root(&span, roots, 3);
-    *out = MAL_VALUE_UNDEFINED;
-    if (converting) {
-        MalString *search = mal_builtin_string_coerce(vm, roots[1]);
-        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
-        roots[1] = mal_value_from_string(search);
+    if (mal_value_is_string(needle)) {
+        *out = mal_builtin_string_search_impl(mal_value_to_string(subject), start, end,
+            mal_value_to_string(needle), mal_builtin_string_search_offset(position, operation),
+            operation);
+    } else if (!mal_builtin_string_span_search_coerced(
+                   vm, subject, start, end, needle, position, operation, out)) {
+        return true;
     }
-    // Primitive needle conversion precedes position conversion even when it allocates.
-    f64 offset = mal_ops_to_number(roots[2]);
-    if (mal_value_is_undefined(position)) {
-        offset = operation == MAL_STRING_SEARCH_ENDS_WITH || operation == MAL_STRING_SEARCH_LAST_INDEX_OF
-            ? INFINITY : 0;
-    }
-    *out = mal_builtin_string_search_impl(mal_value_to_string(roots[0]), start, end,
-        mal_value_to_string(roots[1]), offset, operation);
     switch (operation) {
         case MAL_STRING_SEARCH_INDEX_OF: MAL_PERF_COUNT(string_span_index_of_searches); break;
         case MAL_STRING_SEARCH_LAST_INDEX_OF: MAL_PERF_COUNT(string_span_last_index_of_searches); break;
@@ -1817,8 +1839,6 @@ bool mal_builtin_string_span_search(
         case MAL_STRING_SEARCH_ENDS_WITH: MAL_PERF_COUNT(string_span_ends_with_searches); break;
         default: abort();
     }
-done:
-    if (converting) mal_gc_unroot(&span);
     return true;
 }
 
@@ -3028,26 +3048,40 @@ static MalValue mal_builtin_string_case_range(MalVm *vm, MalString *string, usiz
     return result;
 }
 
-MalValue mal_builtin_string_case_known(MalVm *vm, MalString *string, bool upper, MalUnicodeLocale locale) {
-    if (!string->property_atom || locale != MAL_UNICODE_LOCALE_ROOT) {
-        return mal_builtin_string_case_range(vm, string, 0, mal_string_length(string), upper, locale);
-    }
-    // Programs convert the same header and property names again and again. Atoms live as
-    // long as the VM, so one atom's conversion can be remembered as another without tracing.
-    typeof(vm->string_case_cache[0]) *entry = &vm->string_case_cache[
-        (((uptr) string >> 4) ^ (uptr) upper) % countof(vm->string_case_cache)];
-    if (entry->input == string && entry->upper == upper) {
-        MAL_PERF_COUNT(string_case_atom_hits);
-        return mal_value_from_string(entry->result);
-    }
+// Programs convert the same header and property names again and again. Atoms live as
+// long as the VM, so one atom's conversion can be remembered as another without tracing.
+static inline usize mal_builtin_string_case_slot(const MalVm *vm, const MalString *atom, bool upper) {
+    return (((uptr) atom >> 4) ^ (uptr) upper) % countof(vm->string_case_cache);
+}
+
+static __attribute__((noinline)) MalValue mal_builtin_string_case_known_convert(
+    MalVm *vm, MalString *string, bool upper, MalUnicodeLocale locale
+) {
+    // Conversion may collect; only an atom, which lives as long as the VM, is read after it.
+    bool cacheable = string->property_atom && locale == MAL_UNICODE_LOCALE_ROOT;
     MalValue converted =
         mal_builtin_string_case_range(vm, string, 0, mal_string_length(string), upper, locale);
-    if (!mal_value_is_string(converted)) return converted;
+    if (!cacheable || !mal_value_is_string(converted)) return converted;
     MalString *atom = mal_property_atomize_string(vm, mal_value_to_string(converted));
+    typeof(vm->string_case_cache[0]) *entry =
+        &vm->string_case_cache[mal_builtin_string_case_slot(vm, string, upper)];
     entry->input = string;
     entry->result = atom;
     entry->upper = upper;
     return mal_value_from_string(atom);
+}
+
+// The cache hit needs no frame, so the conversion and its rooted string stay out of line.
+MalValue mal_builtin_string_case_known(MalVm *vm, MalString *string, bool upper, MalUnicodeLocale locale) {
+    if (string->property_atom && locale == MAL_UNICODE_LOCALE_ROOT) {
+        typeof(vm->string_case_cache[0]) *entry =
+            &vm->string_case_cache[mal_builtin_string_case_slot(vm, string, upper)];
+        if (entry->input == string && entry->upper == upper) {
+            MAL_PERF_COUNT(string_case_atom_hits);
+            return mal_value_from_string(entry->result);
+        }
+    }
+    return mal_builtin_string_case_known_convert(vm, string, upper, locale);
 }
 
 static MalValue mal_builtin_string_locale_case_range(
@@ -3115,49 +3149,55 @@ bool mal_builtin_string_span_case(
     return true;
 }
 
-// Positions other than numbers would run ToNumber, which only the ordinary call does, so
-// a false result has taken no observable step.
-static bool string_guarded_method_run(
-    MalVm *vm, MalStringGuardedMethod method, MalValue callee, MalValue receiver,
-    MalValue first, MalValue second, MalValue *out
+static inline MalValue string_guarded_method_fallback(
+    MalVm *vm, MalValue callee, MalValue receiver, const MalValue *args, i32 arg_count
 ) {
-    MalString *string = mal_value_to_string(receiver);
-    switch (method) {
-        case MAL_STRING_GUARDED_TO_LOWER_CASE:
-        case MAL_STRING_GUARDED_TO_UPPER_CASE:
-            *out = mal_builtin_string_case_known(
-                vm, string, method == MAL_STRING_GUARDED_TO_UPPER_CASE, MAL_UNICODE_LOCALE_ROOT);
-            return true;
-        case MAL_STRING_GUARDED_INDEX_OF:
-        case MAL_STRING_GUARDED_LAST_INDEX_OF:
-        case MAL_STRING_GUARDED_INCLUDES:
-        case MAL_STRING_GUARDED_STARTS_WITH:
-        case MAL_STRING_GUARDED_ENDS_WITH:
-            return mal_builtin_string_span_search(
-                vm, callee, true, receiver, 0, mal_string_length(string), first, second,
-                (MalStringSearchOp) (method - MAL_STRING_GUARDED_INDEX_OF), out);
-        case MAL_STRING_GUARDED_SLICE:
-        case MAL_STRING_GUARDED_SUBSTRING:
-        case MAL_STRING_GUARDED_SUBSTR: {
-            if ((!mal_value_is_undefined(first) && !mal_ops_is_number(first)) ||
-                (!mal_value_is_undefined(second) && !mal_ops_is_number(second))) {
-                return false;
-            }
-            f64 start = mal_value_is_undefined(first) ? 0.0 : mal_ops_number_as_f64(first);
-            f64 end = mal_value_is_undefined(second) ? INFINITY : mal_ops_number_as_f64(second);
-            MalBuiltinRootedString root;
-            mal_builtin_string_root_init(&root, string);
-            *out = mal_builtin_string_range_numeric(vm, string, start, end,
-                method == MAL_STRING_GUARDED_SLICE ? MAL_STRING_RANGE_SLICE
-                : method == MAL_STRING_GUARDED_SUBSTRING ? MAL_STRING_RANGE_SUBSTRING
-                : MAL_STRING_RANGE_SUBSTR);
-            mal_builtin_string_root_dispose(&root);
-            return true;
-        }
-    }
-    return false;
+    MAL_PROFILE_SITE_EVENT(vm, vm->profile_current_site_id, MAL_PROFILE_SITE_FALLBACK, 1);
+    return mal_vm_call_cached_value(vm, callee, receiver, args, arg_count);
 }
 
+static __attribute__((noinline)) MalValue string_guarded_search_call(
+    MalVm *vm, MalStringGuardedMethod method, MalValue callee, MalValue receiver,
+    const MalValue *args, i32 arg_count
+) {
+    MalValue result;
+    if (mal_builtin_string_span_search(
+            vm, callee, true, receiver, 0, mal_string_length(mal_value_to_string(receiver)),
+            arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED,
+            arg_count > 1 ? args[1] : MAL_VALUE_UNDEFINED,
+            (MalStringSearchOp) (method - MAL_STRING_GUARDED_INDEX_OF), &result)) {
+        return result;
+    }
+    return string_guarded_method_fallback(vm, callee, receiver, args, arg_count);
+}
+
+// Positions other than numbers would run ToNumber, which only the ordinary call does, so
+// they take the ordinary call with no observable step taken here.
+static __attribute__((noinline)) MalValue string_guarded_range_call(
+    MalVm *vm, MalStringGuardedMethod method, MalValue callee, MalValue receiver,
+    const MalValue *args, i32 arg_count
+) {
+    MalValue first = arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED;
+    MalValue second = arg_count > 1 ? args[1] : MAL_VALUE_UNDEFINED;
+    if ((!mal_value_is_undefined(first) && !mal_ops_is_number(first)) ||
+        (!mal_value_is_undefined(second) && !mal_ops_is_number(second))) {
+        return string_guarded_method_fallback(vm, callee, receiver, args, arg_count);
+    }
+    f64 start = mal_value_is_undefined(first) ? 0.0 : mal_ops_number_as_f64(first);
+    f64 end = mal_value_is_undefined(second) ? INFINITY : mal_ops_number_as_f64(second);
+    MalString *string = mal_value_to_string(receiver);
+    MalBuiltinRootedString root;
+    mal_builtin_string_root_init(&root, string);
+    MalValue result = mal_builtin_string_range_numeric(vm, string, start, end,
+        method == MAL_STRING_GUARDED_SLICE ? MAL_STRING_RANGE_SLICE
+        : method == MAL_STRING_GUARDED_SUBSTRING ? MAL_STRING_RANGE_SUBSTRING
+        : MAL_STRING_RANGE_SUBSTR);
+    mal_builtin_string_root_dispose(&root);
+    return result;
+}
+
+// Every path leaves through a tail call, so this dispatch runs without a frame: a case
+// conversion that hits the atom cache never pays for the search and range paths' roots.
 MalValue mal_builtin_string_method_call(
     MalVm *vm, MalStringGuardedMethod method, MalValue callee, MalValue receiver,
     const MalValue *args, i32 arg_count
@@ -3174,21 +3214,34 @@ MalValue mal_builtin_string_method_call(
         [MAL_STRING_GUARDED_SUBSTRING] = mal_builtin_string_prototype_substring,
         [MAL_STRING_GUARDED_SUBSTR] = mal_builtin_string_prototype_substr,
     };
-    MalValue result;
-    if (mal_value_is_string(receiver) && mal_value_is_native_function_object(callee) &&
-        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) ==
-            expected[method] &&
+    if (!mal_value_is_string(receiver) || !mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
+            expected[method]
 #if MAL_REALMS
         // Another realm's builtin creates its errors and results in that realm.
-        mal_vm_callee_realm(vm, callee) == vm->current_realm &&
+        || mal_vm_callee_realm(vm, callee) != vm->current_realm
 #endif
-        string_guarded_method_run(
-            vm, method, callee, receiver, arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED,
-            arg_count > 1 ? args[1] : MAL_VALUE_UNDEFINED, &result)) {
-        return result;
+    ) {
+        return string_guarded_method_fallback(vm, callee, receiver, args, arg_count);
     }
-    MAL_PROFILE_SITE_EVENT(vm, vm->profile_current_site_id, MAL_PROFILE_SITE_FALLBACK, 1);
-    return mal_vm_call_cached_value(vm, callee, receiver, args, arg_count);
+    switch (method) {
+        case MAL_STRING_GUARDED_TO_LOWER_CASE:
+        case MAL_STRING_GUARDED_TO_UPPER_CASE:
+            return mal_builtin_string_case_known(
+                vm, mal_value_to_string(receiver), method == MAL_STRING_GUARDED_TO_UPPER_CASE,
+                MAL_UNICODE_LOCALE_ROOT);
+        case MAL_STRING_GUARDED_INDEX_OF:
+        case MAL_STRING_GUARDED_LAST_INDEX_OF:
+        case MAL_STRING_GUARDED_INCLUDES:
+        case MAL_STRING_GUARDED_STARTS_WITH:
+        case MAL_STRING_GUARDED_ENDS_WITH:
+            return string_guarded_search_call(vm, method, callee, receiver, args, arg_count);
+        case MAL_STRING_GUARDED_SLICE:
+        case MAL_STRING_GUARDED_SUBSTRING:
+        case MAL_STRING_GUARDED_SUBSTR:
+            return string_guarded_range_call(vm, method, callee, receiver, args, arg_count);
+    }
+    return string_guarded_method_fallback(vm, callee, receiver, args, arg_count);
 }
 
 bool mal_builtin_string_span_locale_case(

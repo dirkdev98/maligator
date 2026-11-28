@@ -53,6 +53,7 @@ for (let round = 0; round < 3; round++) {
 	show("lower string", () => lower("Content-Type"));
 	show("lower non-ascii", () => lower("ÀÉÎ İ"));
 	show("upper string", () => upper("straße"));
+	show("lower built string", () => lower(`X-Round-${round}`));
 	show("lower String object", () => lower(new String("ABC")));
 	show("lower lookalike", () => lower(lookalike));
 	show("lower number", () => lower(12));
