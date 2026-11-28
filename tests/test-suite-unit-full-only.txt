@@ -6,6 +6,8 @@ tests/test-process.test.ts
 tests/cli-run.test.ts
 tests/cli-print.test.ts
 tests/cli-feedback.test.ts
+tests/cli-feedback-production.test.ts
+tests/feedback-fuzz.test.ts
 tests/self-compile-experiment.test.ts
 tests/wasm-cache.test.ts
 tests/wasm-embedding.test.ts

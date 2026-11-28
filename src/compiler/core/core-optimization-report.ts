@@ -1,3 +1,5 @@
+import { formatCoreFeedbackReport } from "./core-feedback.ts";
+import type { CoreFeedbackReport } from "./core-feedback.ts";
 import type {
 	CoreOptimizationPlan,
 	CoreOptimizationPlanStatistics,
@@ -106,6 +108,8 @@ export interface CoreOptimizationReport {
 	readonly queue: CoreQueueWorkReport;
 	readonly budget: CoreBudgetWorkReport;
 	readonly counters: CoreCompilerWorkCounters;
+	/** Present when the compilation was given development-run feedback. */
+	readonly feedback?: CoreFeedbackReport;
 }
 
 export interface CoreCompilerWorkCounters {
@@ -1430,5 +1434,8 @@ export function formatCoreOptimizationReport(
 			label: "Core optimizer budget",
 			value: `${report.budget.workItems} work items, ${report.budget.edits} edits, exhausted ${report.budget.exhaustedPasses.join(", ") || "none"}`,
 		},
+		...(report.feedback === undefined
+			? []
+			: [{ label: "Core feedback", value: formatCoreFeedbackReport(report.feedback) }]),
 	];
 }

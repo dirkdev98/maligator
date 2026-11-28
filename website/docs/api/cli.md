@@ -24,7 +24,7 @@ Reports the compiler, planned Zig download, and packaged Rust archive availabili
 maligator build [entry] [--config path] [--name name]
   [--production] [--compile-concurrency 1..3]
   [--artifact directory] [--target rust-triple]
-  [--profile[=compiler]] [--verbose] [--core-report mode]
+  [--profile[=compiler]] [--feedback file] [--verbose] [--core-report mode]
 ```
 
 Compiles a native executable. Stdout contains the executable path, or the artifact directory when you pass `--artifact`. Progress goes to stderr. An explicit entry overrides `config.entry`, and `--name` overrides `outputName`. Without either name, uses the unscoped package name or project directory. See [toolchain setup](/guides/native-toolchain) for how builds find their compiler and runtime archives.
@@ -35,6 +35,7 @@ Compiles a native executable. Stdout contains the executable path, or the artifa
 | `--compile-concurrency` | Production total job limit, integer 1..3. Default is at most 3, bounded by host CPU capacity. Profiling is serial. |
 | `--artifact`            | Write a deployable directory; requires production and an absent or empty destination.                              |
 | `--target`              | Select a cross-build target in Rust triple syntax. Uses Zig for C compilation and linking.                         |
+| `--feedback`            | Read a [feedback file](#feedback) recorded by `run`, `dev`, or `test`; requires production.                        |
 | `--core-report`         | `phases`, `counters`, or `full` compiler diagnostics.                                                              |
 | `--verbose`             | Print build diagnostics.                                                                                           |
 
@@ -88,9 +89,11 @@ Discovers `*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}`. Ordinary runs i
 
 ## --feedback {#feedback}
 
-Available on `run`, `dev`, and `test`. Records what each executed property access saw into a JSON feedback file: the receivers' shapes and heap kind, an inline cache mode such as `inherited`, `dictionary` for receivers that keep their properties in a table, or `megamorphic` once a site saw more than four shapes. Every shape a site saw counts, not only the ones its cache still holds when the program ends. Sites are keyed by their source function, callbacks and module top-level code included, and their offset, so a later build can match them while the source is unchanged. Sites that never ran are absent.
+Available on `run`, `dev`, and `test`, and read by `build --production`. Records what each executed property access saw into a JSON feedback file: the receivers' shapes and heap kind, an inline cache mode such as `inherited`, `dictionary` for receivers that keep their properties in a table, or `megamorphic` once a site saw more than four shapes. Every shape a site saw counts, not only the ones its cache still holds when the program ends. Sites are keyed by their source function, callbacks and module top-level code included, and their offset, so a later build can match them while the source is unchanged. Sites that never ran are absent.
 
 Each command records one unit: `run:<entry>`, `dev:<entry>`, or `test:*` for a whole test invocation. Entries and modules are named relative to the project root, the directory of the build config, else the entry's nearest directory with a `package.json`, so a run from a subdirectory records the same unit. Recording a unit replaces its earlier entries and keeps every other unit's, so one file can collect several workloads. The file is deterministic: an identical run writes identical bytes. `dev` re-records its unit when each generation stops. `--feedback` cannot combine with `--profile`, and on `test` not with `--watch` or `--isolate`.
+
+A production build matches the file's functions to the program by source identity and revision, and combines every unit's entries for a site. A function edited since the recording, and every function around it, is skipped, so stale feedback costs speed but never changes behavior. Only the matched entries enter the build's cache identity: a file that matches nothing builds the same program as no file. `--core-report counters` reports the matched and stale functions and the sites the compiler found.
 
 ## --profile {#profile}
 

@@ -11,6 +11,7 @@ import {
 	compilerProducerIdentity,
 } from "./compiler-cache-identity.ts";
 import type { CoreCompilationContext } from "./compiler/core/core-compilation.ts";
+import type { CoreFeedback } from "./compiler/core/core-feedback.ts";
 import type { CoreOptimizationPlan } from "./compiler/core/core-ir-regions.ts";
 import type { CoreVerificationProfile } from "./compiler/core/core-ir-verifier.ts";
 import type { SealedCoreProgram } from "./compiler/core/core-ir.ts";
@@ -73,6 +74,7 @@ import { programImageStats } from "./compiler/target/program-image.ts";
 import type { ProgramImageStats } from "./compiler/target/program-image.ts";
 import type { RuntimeImage } from "./compiler/target/runtime-image.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
+import type { ProductionFeedback } from "./feedback/production.ts";
 import {
 	frontendArtifactCacheRoot,
 	frontendCompilerArtifactIdentity,
@@ -214,6 +216,11 @@ export interface CompileBuildFrontendOptions {
 	coreInstrumentation?: CoreInstrumentationMode;
 	/** Include source-site identities and compiler remarks in the live program image. */
 	profile?: boolean;
+	/**
+	 * Development-run feedback for the main program's Core passes. The cache
+	 * identity covers only what it matches; see `feedbackIdentity`.
+	 */
+	feedback?: ProductionFeedback;
 	cacheDirectory?: string;
 	session?: FrontendCompilationSession;
 	/** Apply build-time eval/RegExp policy checks. Defaults to true. */
@@ -277,6 +284,64 @@ function cacheIdentity(
 
 function manifestPath(root: string, entrypoint: string, identity: string): string {
 	return path.join(root, "entries", digest(entrypoint), `${identity}.json`);
+}
+
+/**
+ * The identity of a build with feedback: the matched, combined sites change what
+ * Core passes may speculate on, the rest of the file changes nothing. Feedback
+ * that matches nothing keeps the identity of a build without it.
+ */
+function feedbackIdentity(identity: string, projection: string | undefined): string {
+	return projection === undefined
+		? identity
+		: digest(JSON.stringify({ identity, feedback: projection }));
+}
+
+/**
+ * The source function identities of the program a feedback build last compiled,
+ * so a later feedback build finds its projection without lowering the program.
+ */
+interface FeedbackIdentityIndex {
+	schema: typeof BUILD_FRONTEND_CACHE_SCHEMA;
+	identity: string;
+	dependencies: Array<BuildDependencyIdentity>;
+	resolutionInputs: Array<ModuleResolutionInput>;
+	functions: Record<string, string>;
+}
+
+function feedbackIndexPath(root: string, entrypoint: string, identity: string): string {
+	return path.join(root, "feedback", digest(entrypoint), `${identity}.json`);
+}
+
+/** The projection hash of `feedback`, or null when no current index names the program's functions. */
+function cachedFeedbackProjection(
+	root: string,
+	entrypoint: string,
+	identity: string,
+	feedback: ProductionFeedback,
+	session: FrontendCompilationSession,
+	platformSourceRoot: string,
+): string | undefined | null {
+	let index: FeedbackIdentityIndex;
+	try {
+		index = JSON.parse(
+			readFileSync(feedbackIndexPath(root, entrypoint, identity), "utf-8"),
+		) as FeedbackIdentityIndex;
+	} catch {
+		return null;
+	}
+	if (
+		index?.schema !== BUILD_FRONTEND_CACHE_SCHEMA ||
+		index.identity !== identity ||
+		typeof index.functions !== "object" ||
+		index.functions === null ||
+		!Array.isArray(index.dependencies) ||
+		!Array.isArray(index.resolutionInputs) ||
+		!index.resolutionInputs.every(moduleResolutionInputUnchanged) ||
+		!dependenciesUnchanged(index.dependencies, session, platformSourceRoot)
+	)
+		return null;
+	return feedback.project(new Map(Object.entries(index.functions))).hash;
 }
 
 function readManifest(file: string): BuildFrontendManifest | undefined {
@@ -815,7 +880,7 @@ function prepareBuildFrontend(
 	const platformSourceRoot = path.resolve(
 		options.platformSourceRoot ?? import.meta.dirname,
 	);
-	const identity = cacheIdentity(options, platformSourceRoot);
+	const baseIdentity = cacheIdentity(options, platformSourceRoot);
 	// Compiler artifacts omit the source identities and remarks needed by a profile.
 	const liveProfile = options.profile === true;
 	const forceCompile = options.forceCompile === true || liveProfile;
@@ -830,13 +895,25 @@ function prepareBuildFrontend(
 		};
 	};
 
-	if (!forceCompile) {
+	// Without a current identity index, a feedback build compiles to learn its projection.
+	const cachedProjection =
+		options.feedback === undefined || forceCompile
+			? undefined
+			: cachedFeedbackProjection(
+					root,
+					entrypoint,
+					baseIdentity,
+					options.feedback,
+					session,
+					platformSourceRoot,
+				);
+	if (!forceCompile && cachedProjection !== null) {
 		const validationStartedAt = Date.now();
 		const cached = loadCached(
 			root,
 			artifactRoot,
 			entrypoint,
-			identity,
+			feedbackIdentity(baseIdentity, cachedProjection),
 			executionIdentity(options.execution),
 			options.execution?.command ?? null,
 			session,
@@ -977,6 +1054,7 @@ function prepareBuildFrontend(
 	let fragmentFallback: string | undefined;
 	let optimizationReport: CoreOptimizationReport | undefined;
 	let optimizationPlan: CoreOptimizationPlan | undefined;
+	let resolvedFeedback: CoreFeedback | undefined;
 	let policiesPrepared = false;
 	const prepareMain = () => {
 		if (policiesPrepared) return;
@@ -1072,9 +1150,10 @@ function prepareBuildFrontend(
 			facts,
 			options,
 			phases,
-			(report, plan) => {
+			(report, plan, feedback) => {
 				optimizationReport = report;
 				optimizationPlan = plan;
+				resolvedFeedback = feedback;
 			},
 		);
 		loadProgramImage = () => programImage;
@@ -1151,6 +1230,7 @@ function prepareBuildFrontend(
 			left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
 		);
 		session.flush();
+		const identity = feedbackIdentity(baseIdentity, resolvedFeedback?.projection.hash);
 		const key = contentKey(identity, entrypoint, dependencies);
 		const runtimeArtifacts =
 			runtimeArtifactIdentities ??
@@ -1234,6 +1314,21 @@ function prepareBuildFrontend(
 					optimizationDetails,
 				} satisfies BuildFrontendManifest)}\n`,
 			);
+		if (!liveProfile && resolvedFeedback !== undefined)
+			writeFileAtomically(
+				feedbackIndexPath(root, entrypoint, baseIdentity),
+				`${JSON.stringify({
+					schema: BUILD_FRONTEND_CACHE_SCHEMA,
+					identity: baseIdentity,
+					dependencies,
+					resolutionInputs,
+					functions: Object.fromEntries(
+						[...resolvedFeedback.identities].sort(([left], [right]) =>
+							left < right ? -1 : left > right ? 1 : 0,
+						),
+					),
+				} satisfies FeedbackIdentityIndex)}\n`,
+			);
 
 		return {
 			workerImages,
@@ -1303,7 +1398,11 @@ function compileProgramImage(
 	facts: CompilerProgramFacts,
 	options: CompileBuildFrontendOptions,
 	phases: BuildFrontendPhases,
-	onOptimization: (report: CoreOptimizationReport, plan: CoreOptimizationPlan) => void,
+	onOptimization: (
+		report: CoreOptimizationReport,
+		plan: CoreOptimizationPlan,
+		feedback: CoreFeedback | undefined,
+	) => void,
 ): ProgramImage {
 	const coreOptions: CompileCoreOptions = {
 		facts,
@@ -1311,9 +1410,10 @@ function compileProgramImage(
 		coreVerification: options.coreVerification,
 		coreInstrumentation: options.coreInstrumentation ?? "off",
 		profile: options.profile,
+		feedback: options.feedback,
 		afterCoreOptimization(program, context, report, plan) {
 			options.afterCoreOptimization?.(program, context, report, plan);
-			onOptimization(report, plan);
+			onOptimization(report, plan, context.feedback);
 		},
 		runPhase(phase, run) {
 			const phaseStartedAt = Date.now();

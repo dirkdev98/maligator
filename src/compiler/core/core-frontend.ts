@@ -4,10 +4,13 @@ import type { SourceFunctionOriginOptions } from "../frontend/source-function-or
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type { PackageRootLowering } from "../shared/module-path-values.ts";
 import type { ConstructedCoreCompilation } from "./core-compilation.ts";
+import type { CoreFeedbackSource } from "./core-feedback.ts";
 import { constructSemanticProgramCore } from "./semantic-lowering.ts";
 
 export interface CoreFrontendOptions {
 	readonly sourceOrigins?: SourceFunctionOriginOptions;
+	/** Feedback to match against the program's source functions; see `CoreCompilationContext.feedback`. */
+	readonly feedback?: CoreFeedbackSource;
 	readonly evalCompletion?: boolean;
 	readonly evalDirect?: boolean;
 	/** The eval'd source is a Script (GlobalDeclarationInstantiation), not eval code. */
@@ -35,6 +38,7 @@ export function lowerSemanticProgramToCore(
 	return runPhase("construct core ir", () =>
 		constructSemanticProgramCore(semantic, {
 			sourceOrigins: options.sourceOrigins,
+			feedback: options.feedback,
 			evalCompletion: options.evalCompletion,
 			evalDirect: options.evalDirect,
 			evalScript: options.evalScript,

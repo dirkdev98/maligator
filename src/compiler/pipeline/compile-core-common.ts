@@ -4,6 +4,8 @@ import type {
 	CoreCompilation,
 	CoreCompilationContext,
 } from "../core/core-compilation.ts";
+import { attachedCoreFeedbackSites, coreFeedbackReport } from "../core/core-feedback.ts";
+import type { CoreFeedbackSource } from "../core/core-feedback.ts";
 import { lowerSemanticProgramToCore } from "../core/core-frontend.ts";
 import type { CoreOptimizationPlan } from "../core/core-ir-regions.ts";
 import type { CoreVerificationProfile } from "../core/core-ir-verifier.ts";
@@ -35,6 +37,8 @@ export interface CompileCoreOptions {
 	/** Derive source-site identities and compiler remarks for a profiled image. */
 	profile?: boolean;
 	profileModuleKeys?: ReadonlyMap<string, string>;
+	/** Development-run feedback for Core passes; see `CoreCompilationContext.feedback`. */
+	feedback?: CoreFeedbackSource;
 	/**
 	 * Core verification depth. Boundary verification is unconditional; `per-pass`
 	 * additionally attributes an invalid graph to the pass that produced it.
@@ -72,6 +76,7 @@ export function constructSemanticProgramCore(
 		...options.semanticLowering,
 		sourceOrigins:
 			options.profile === true ? { moduleKeys: options.profileModuleKeys } : undefined,
+		feedback: options.feedback,
 		facts: {
 			...(options.facts ?? conservativeCompilerProgramFacts()),
 			compilationMode: options.optimization ?? "full",
@@ -100,6 +105,11 @@ export function optimizeConstructedCore(
 	runPhase: <T>(phase: CompileCorePhase, run: () => T) => T,
 	privateRestIteration = options.privateRestIteration,
 ): CoreCompilation {
+	const feedback = core.context.feedback;
+	const constructedFeedbackSites =
+		feedback === undefined
+			? 0
+			: attachedCoreFeedbackSites(feedback, core.program).sites.size;
 	const optimizedResult = runPhase("optimize core ir", () => {
 		return optimizeCore(core, {
 			privateRestIteration,
@@ -113,10 +123,21 @@ export function optimizeConstructedCore(
 		options.profile === true
 			? attachCoreCompilerSiteFacts(optimizedResult.compilation)
 			: optimizedResult.compilation;
+	const report =
+		feedback === undefined
+			? optimizedResult.report
+			: Object.freeze({
+					...optimizedResult.report,
+					feedback: coreFeedbackReport(
+						feedback,
+						constructedFeedbackSites,
+						attachedCoreFeedbackSites(feedback, optimized.program),
+					),
+				});
 	options.afterCoreOptimization?.(
 		optimized.program,
 		optimized.context,
-		optimizedResult.report,
+		report,
 		optimized.plan,
 	);
 	return optimized;

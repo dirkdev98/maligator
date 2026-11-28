@@ -100,6 +100,7 @@ import {
 	developmentFragmentUnits,
 } from "./development-fragments.ts";
 import { createDevelopmentSession } from "./development-session.ts";
+import { FeedbackFileError, ProductionFeedback } from "./feedback/production.ts";
 import { feedbackModuleKey, feedbackProjectRoot } from "./feedback/project.ts";
 import { feedbackDumpPath, recordFeedbackCapture } from "./feedback/record.ts";
 import { checkLibraries, formatFfiCheck } from "./ffi/check.ts";
@@ -719,6 +720,19 @@ function prepareCommandState(
 	);
 	reporter.detail("Entrypoint", entrypointPath);
 	reporter.detail("Config", command.configPath ?? "automatic/default");
+	let productionFeedback: ProductionFeedback | undefined;
+	if (command.kind === "build" && command.feedback !== undefined) {
+		reporter.detail("Feedback", command.feedback);
+		try {
+			productionFeedback = ProductionFeedback.read(
+				command.feedback,
+				feedbackProjectRoot(entrypointPath, command.configPath),
+			);
+		} catch (error) {
+			if (error instanceof FeedbackFileError) commandError(`error: ${error.message}`);
+			throw error;
+		}
+	}
 	if (
 		command.kind === "build" &&
 		command.internal.serializePath !== undefined &&
@@ -884,6 +898,7 @@ function prepareCommandState(
 		// names its own pass instead of surfacing at a later boundary.
 		...(debugEnabled ? { coreVerification: "per-pass" as const } : {}),
 		profile: command.profile,
+		...(productionFeedback === undefined ? {} : { feedback: productionFeedback }),
 		coreInstrumentation:
 			command.kind === "build" ? command.internal.coreReport : undefined,
 		enforcePolicies: !(

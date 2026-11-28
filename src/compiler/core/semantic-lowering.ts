@@ -133,6 +133,7 @@ import type {
 } from "./core-compilation.ts";
 import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
+import type { CoreFeedback, CoreFeedbackSource } from "./core-feedback.ts";
 import { formatCoreProgram } from "./core-format.ts";
 import {
 	emitCoreEntryInstructions,
@@ -151,6 +152,7 @@ import type { CoreSourcePosition } from "./core-store.ts";
 interface CoreFrontendContext {
 	modulePrivateNames: Array<{ slot: number; evaluator: number }>;
 	sourceOrigins?: SourceFunctionOrigins;
+	feedback?: CoreFeedback;
 	/**
 	 * The semantic program that we are compiling.
 	 */
@@ -915,6 +917,7 @@ export function constructSemanticProgramCore(
 	semantic: SemanticProgram,
 	options: {
 		sourceOrigins?: SourceFunctionOriginOptions;
+		feedback?: CoreFeedbackSource;
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
 		evalScript?: boolean;
@@ -1050,6 +1053,8 @@ export function constructSemanticProgramCore(
 	if (options.sourceOrigins !== undefined) {
 		program.sourceOrigins = collectSourceFunctionOrigins(semantic, options.sourceOrigins);
 	}
+	if (options.feedback !== undefined)
+		program.feedback = options.feedback.resolve(semantic);
 	for (const [path, binding] of linkage.moduleDefaultBinding) {
 		program.moduleDefaultBinding.set(path, binding);
 	}
@@ -1373,6 +1378,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 		program: program.core,
 		context: {
 			facts: program.facts,
+			...(program.feedback === undefined ? {} : { feedback: program.feedback }),
 			data: coreProgramDataFromSemantic(program.semantic, {
 				moduleLexicalSlots:
 					moduleLinks === undefined

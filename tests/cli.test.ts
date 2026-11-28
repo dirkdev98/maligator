@@ -376,6 +376,10 @@ describe("parseCliArgs", () => {
 		[["build", "--ablate-optimization"], "unknown option '--ablate-optimization'"],
 		[["build", "--core-cache"], "unknown option '--core-cache'"],
 		[["build", "--config"], "option '--config' requires a value"],
+		[
+			["build", "--feedback", "app.feedback.json"],
+			"build --feedback requires --production",
+		],
 		[["build", "one.ts", "two.ts"], "unexpected argument 'two.ts'"],
 		[["run", "one.ts", "two.ts"], "unexpected argument 'two.ts'"],
 		[["test", "--repeat", "0"], "requires a positive integer"],

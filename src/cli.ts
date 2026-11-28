@@ -22,6 +22,7 @@ export interface BuildCommand {
 	compileConcurrency?: number;
 	profile: boolean;
 	profileCompiler?: boolean;
+	feedback?: string;
 	internal: InternalBuildOptions;
 }
 
@@ -454,6 +455,12 @@ const COMMAND_HELP = {
 				},
 			),
 			profile,
+			value(
+				"--feedback",
+				"file",
+				"Read what property sites saw from a feedback file (requires --production)",
+				(command, file) => (command.feedback = file),
+			),
 			flag("--verbose", "Show compiler diagnostics", (command) => {
 				command.internal.verbose = true;
 			}),
@@ -720,6 +727,8 @@ function parseBuild(args: Array<string>): CliCommand {
 
 	if (command.compileConcurrency !== undefined && !command.production)
 		throw new CliUsageError("build --compile-concurrency requires --production");
+	if (command.feedback !== undefined && !command.production)
+		throw new CliUsageError("build --feedback requires --production");
 	if ((command.compileConcurrency ?? 1) > 1 && (!command.production || command.profile))
 		throw new CliUsageError(
 			"parallel build compilation requires --production without --profile",

@@ -5,6 +5,7 @@ import type { ExternalModuleInterface } from "../frontend/module-graph.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import type { SourceCallSite } from "../frontend/source-function-origins.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
+import type { CoreFeedback } from "./core-feedback.ts";
 import type { VerifiedCoreOptimizationPlan } from "./core-ir-regions.ts";
 import type { CoreProgram, SealedCoreProgram } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
@@ -172,6 +173,12 @@ export interface CoreImportedModuleBindings {
 export interface CoreCompilationContext {
 	readonly facts: CompilerProgramFacts;
 	readonly data: CoreProgramData;
+	/**
+	 * Development-run feedback matched to this program, looked up per instruction
+	 * with `corePropertyFeedback`. It is speculation, never a proof: whatever a
+	 * pass derives from it needs a guard and a generic fallback.
+	 */
+	readonly feedback?: CoreFeedback;
 }
 
 export function coreDeferredHostSlots(data: CoreProgramData): ReadonlySet<number> {
