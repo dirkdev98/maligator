@@ -3198,6 +3198,19 @@ bool mal_vm_object_try_store_static_remaining(
     return mal_vm_object_try_store(object, ic->key, value, ic);
 }
 
+void mal_vm_object_store_hit_marking(MalObject *object, MalValue *field, MalValue value) {
+    mal_gc_satb_record(*field);
+    *field = value;
+    mal_gc_card(&object->header, value);
+}
+
+void mal_vm_object_store_hit_card(MalObject *object, MalValue value) {
+    if (object->header.dirty != MAL_REMEMBERED_FULL &&
+        !mal_heap_mark_is_old(mal_heap_mark_load(mal_value_to_heap(value)))) {
+        mal_gc_remember(&object->header);
+    }
+}
+
 MAL_PRESERVE_MOST bool mal_vm_property_try_load_length_static_remaining(
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
 ) {

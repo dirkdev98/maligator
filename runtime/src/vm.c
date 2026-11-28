@@ -3470,7 +3470,7 @@ void mal_vm_interpret(
                 MalValue value = registers[instruction->as.store_property_static.value];
                 MalInlineCache *ic = mal_vm_property_ic_at(
                     frame, instruction->as.store_property_static.ic_index);
-                if (mal_vm_property_try_store_static(object, value, ic)) {
+                if (mal_vm_property_try_store_static(vm, object, value, ic)) {
                     MAL_PERF_COUNT(interpreter_local_store_ic_hits);
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;

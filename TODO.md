@@ -558,9 +558,10 @@ distinct when measuring text work.
       takes about 37k, spread thinly over more than 40 functions: cached property
       hits are a fifth of it (19 instructions per hit), function entry and exit
       another fifth (about 50 per call, 146 calls per request), call sites a sixth.
-      Leads: choose store and GC-barrier code by the stored value (inline field
-      stores on cache hits, no barriers on a fresh scope's first stores, one isolate
-      lookup per call); inlining inherited-method lookups at the 697 call loads,
+      Leads: no barriers on a fresh scope's first stores, and the same inline hit
+      write for class-slot and constructor-initialization stores that static
+      inline-cache store hits now get (they went from about 50 to 30-36
+      instructions); inlining inherited-method lookups at the 697 call loads,
       which costs about 0.9% generated code. A one-compare own-slot check that tagged
       non-slot rows shortened hits to 16 instructions and shrank generated code 6.6%,
       but Express and self-compile each retired about 0.65% more instructions. Take

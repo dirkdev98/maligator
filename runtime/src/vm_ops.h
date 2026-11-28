@@ -2997,18 +2997,75 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
 __attribute__((noinline)) bool mal_vm_object_try_store_static_remaining(
     MalObject *object, MalValue value, MalInlineCache *ic);
 
-/**
+/** A store hit's overwrite while incremental marking runs: SATB record, store, card. */
+__attribute__((noinline, cold)) void mal_vm_object_store_hit_marking(
+    MalObject *object, MalValue *field, MalValue value);
+
+/** A store hit's card for a heap value just stored into an old object. */
+__attribute__((noinline)) void mal_vm_object_store_hit_card(MalObject *object, MalValue value);
+
+/*
+ * The write of a monomorphic store hit, whose shape match proves the slot in range.
+ * Each site expands it whole: as a plain inline call clang outlined the shared field
+ * store, so every hit paid a call and a frame. The marking flag comes through
+ * `vm->isolate` rather than the thread's isolate lookup; that plain load lets clang
+ * reuse one read across the hits of a call-free stretch, which is sound because only
+ * the mutator flips the flag, inside a safepoint or collection that a call reaches.
+ */
+static inline __attribute__((always_inline)) void mal_vm_object_store_hit(
+    const MalVm *vm, MalObject *object, u32 slot, MalValue value
+) {
+    MalValue *field = (MalValue *) mal_object_fields_nonempty(object) + slot;
+    if (__builtin_expect(vm->isolate->gc_marking_active, 0)) {
+        mal_vm_object_store_hit_marking(object, field, value);
+        return;
+    }
+    *field = value;
+    // The OLD bit changes only while the mutator is parked, so a relaxed read is
+    // current; a young owner can't hold an old-to-young edge.
+    if (mal_value_is_heap(value) && mal_heap_mark_is_old(mal_heap_mark_load(&object->header))) {
+        mal_vm_object_store_hit_card(object, value);
+    }
+}
+
+/*
+ * The hit write of a value that is never a heap reference (Number, Boolean,
+ * undefined, null). The SATB deletion barrier still records the overwritten value,
+ * which may be a reference; storing a non-reference creates no old-to-young edge, so
+ * there is no card.
+ */
+static inline __attribute__((always_inline)) void mal_vm_object_store_hit_primitive(
+    const MalVm *vm, MalObject *object, u32 slot, MalValue value
+) {
+    MalValue *field = (MalValue *) mal_object_fields_nonempty(object) + slot;
+    if (__builtin_expect(vm->isolate->gc_marking_active, 0)) mal_gc_satb_record(*field);
+    *field = value;
+}
+
+/*
  * Static-name variant of mal_vm_object_try_store; the site identity supplies the key
  * guard. Only the monomorphic overwrite of an ordinary object expands at each site:
  * inlining the transition row's slot growth too made clang outline the whole probe,
  * so every store paid a call even on a monomorphic hit.
  */
 static inline __attribute__((always_inline)) bool mal_vm_object_try_store_static(
-    MalObject *object, MalValue value, MalInlineCache *ic
+    const MalVm *vm, MalObject *object, MalValue value, MalInlineCache *ic
 ) {
     if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && !object->is_prototype) {
         mal_perf_ic_store_mono_hit();
-        mal_object_field_store_shaped(object, ic->slot, value);
+        mal_vm_object_store_hit(vm, object, ic->slot, value);
+        return true;
+    }
+    return mal_vm_object_try_store_static_remaining(object, value, ic);
+}
+
+/** The static store probe for a value the compiler proves is never a heap reference. */
+static inline __attribute__((always_inline)) bool mal_vm_object_try_store_static_primitive(
+    const MalVm *vm, MalObject *object, MalValue value, MalInlineCache *ic
+) {
+    if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && !object->is_prototype) {
+        mal_perf_ic_store_mono_hit();
+        mal_vm_object_store_hit_primitive(vm, object, ic->slot, value);
         return true;
     }
     return mal_vm_object_try_store_static_remaining(object, value, ic);
@@ -3022,10 +3079,10 @@ static inline bool mal_vm_property_try_store(MalValue receiver, MalValue key, Ma
 }
 
 /** Static-name store probe: the site identity supplies the key guard. */
-static inline bool mal_vm_property_try_store_static(MalValue receiver, MalValue value,
-                                                    MalInlineCache *ic) {
+static inline bool mal_vm_property_try_store_static(const MalVm *vm, MalValue receiver,
+                                                    MalValue value, MalInlineCache *ic) {
     MalObject *object = mal_vm_as_object(receiver);
-    return object != nullptr && mal_vm_object_try_store_static(object, value, ic);
+    return object != nullptr && mal_vm_object_try_store_static(vm, object, value, ic);
 }
 
 /** A store to a slot that Core or a matched class layout proves within the shape. */
@@ -3039,9 +3096,11 @@ static inline void mal_vm_object_slot_store(MalObject *object, u32 slot, MalValu
 void mal_vm_store_known_own_data_miss(MalObject *object, MalValue key, MalValue value, MalInlineCache *ic);
 
 // Core proves writability and own presence; cache misses only resolve the physical slot.
-static inline void mal_vm_store_known_own_data(MalValue receiver, MalValue key, MalValue value, MalInlineCache *ic) {
+static inline void mal_vm_store_known_own_data(
+    const MalVm *vm, MalValue receiver, MalValue key, MalValue value, MalInlineCache *ic
+) {
     MalObject *object = mal_value_to_object(receiver);
-    if (ic != nullptr && ic->mode == MAL_IC_MODE_SHAPE && mal_vm_object_try_store_static(object, value, ic)) return;
+    if (ic != nullptr && ic->mode == MAL_IC_MODE_SHAPE && mal_vm_object_try_store_static(vm, object, value, ic)) return;
     mal_vm_store_known_own_data_miss(object, key, value, ic);
 }
 
@@ -3098,7 +3157,7 @@ static inline bool mal_vm_try_store_known_own_slots(
 ) {
     MAL_PERF_COUNT(known_own_slot_store_probes);
     MalObject *object = mal_vm_as_object(receiver);
-    if (object != nullptr && mal_vm_object_try_store_static(object, value, ic)) {
+    if (object != nullptr && mal_vm_object_try_store_static(vm, object, value, ic)) {
         MAL_PERF_COUNT(known_own_slot_store_hits);
         return true;
     }

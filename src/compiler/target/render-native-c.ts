@@ -16652,8 +16652,15 @@ class NativeInstructionEmission {
 			}
 			return numericKey !== null ? ordinary(this.slowPathFramePosition()) : ordinary();
 		}
+		// A value that is never a heap reference stores with no generational card.
+		const storeProbe =
+			((this.operandKind(instruction.value) ?? COMPILER_VALUE_KIND_TOP) &
+				~COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE) ===
+			0
+				? "mal_vm_object_try_store_static_primitive"
+				: "mal_vm_object_try_store_static";
 		const probe = (): string =>
-			`${receiverName} && mal_vm_object_try_store_static(${receiverName}, ${this.boxed(instruction.value)}, &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`;
+			`${receiverName} && ${storeProbe}(vm, ${receiverName}, ${this.boxed(instruction.value)}, &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`;
 		const slowStore = [
 			...this.slowPathFramePosition(),
 			...(this.context.incomingRootPublication ?? []).map((line) => `  ${line}`),
@@ -20126,7 +20133,7 @@ function emitInstruction(
 			instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
 		)
 			return [
-				`mal_vm_store_known_own_data(${emission.boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), ${emission.boxed(instruction.value)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+				`mal_vm_store_known_own_data(vm, ${emission.boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), ${emission.boxed(instruction.value)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
 			];
 	}
 
