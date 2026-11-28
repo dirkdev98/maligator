@@ -12,6 +12,7 @@ import {
 } from "../src/compiler/core/core-function-clone.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreInstructionEffects } from "../src/compiler/core/core-ir-opcodes.ts";
+import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
 import {
 	analyzeCoreNativeEntry,
 	coreNativeEntryProofIsCurrent,
@@ -22,6 +23,7 @@ import {
 } from "../src/compiler/core/core-native-instruction-facts.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
+import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
 import { decodeInstructionEffects } from "../src/compiler/shared/instruction-facts.ts";
 import {
 	deserializeCompilerArtifact,
@@ -118,6 +120,27 @@ describe("builtin callback effect dependencies", () => {
 		expect(summaries().summary(root.id)?.effects.writes).toContain("global-slot");
 		refineCoreBuiltinCallbackEffects(program, summaries());
 		expect(coreInstructionEffects(root, call).writes).toContain("global-slot");
+	});
+
+	it("verifies a callback refinement that writes a domain the builtin's own effects omit", () => {
+		const { program, root, callback, targetEntry, empty, call, summaries } =
+			callbackProgram({
+				worldAssumptions: builtinWorldAssumptions(
+					"Map.prototype.forEach",
+					"exact-builtin-proof",
+				),
+			});
+		const edit = CoreEditor.open(program, callback.id);
+		edit.insertInstruction(targetEntry, undefined, "storeGlobal", [empty], {
+			attributes: { index: 2 },
+		});
+		edit.commit();
+		refineCoreBuiltinCallbackEffects(program, summaries());
+		expect(coreInstructionEffects(root, call)).toMatchObject({
+			writes: ["global-slot"],
+			callsUserCode: false,
+		});
+		expect(() => verifyCoreProgram(program)).not.toThrow();
 	});
 
 	it("converges recursive callbacks and withdraws and rediscovers effects when they become opaque", () => {

@@ -226,22 +226,31 @@ function verifyAttributeRelocations(
 
 function verifyEffectRefinement(
 	instruction: CoreInstructionId,
+	opcode: string,
 	refined: CoreInstructionEffects,
 	baseline: CoreInstructionEffects,
 ): void {
-	for (const domain of refined.reads) {
-		if (!baseline.reads.includes(domain)) {
-			fail(`instruction @${instruction} adds read effect ${domain} in a refinement`);
+	// User code may read and write any domain, so a refinement that proves which
+	// code runs, such as a builtin's known callback, may name the domains it touches.
+	if (!baseline.callsUserCode) {
+		for (const domain of refined.reads) {
+			if (!baseline.reads.includes(domain)) {
+				fail(
+					`instruction @${instruction} ${opcode} adds read effect ${domain} in a refinement`,
+				);
+			}
 		}
-	}
-	for (const domain of refined.writes) {
-		if (!baseline.writes.includes(domain)) {
-			fail(`instruction @${instruction} adds write effect ${domain} in a refinement`);
+		for (const domain of refined.writes) {
+			if (!baseline.writes.includes(domain)) {
+				fail(
+					`instruction @${instruction} ${opcode} adds write effect ${domain} in a refinement`,
+				);
+			}
 		}
 	}
 	for (const flag of ["mayThrow", "maySuspend", "mayGc", "callsUserCode"] as const) {
 		if (refined[flag] && !baseline[flag]) {
-			fail(`instruction @${instruction} adds ${flag} in a refinement`);
+			fail(`instruction @${instruction} ${opcode} adds ${flag} in a refinement`);
 		}
 	}
 }
@@ -712,7 +721,12 @@ function verifyInstructionRows(
 						`instruction @${instruction} references deleted fact !${refinement.proof}`,
 					);
 				}
-				verifyEffectRefinement(instruction, refinement.effects, descriptor.effects);
+				verifyEffectRefinement(
+					instruction,
+					descriptor.opcode,
+					refinement.effects,
+					descriptor.effects,
+				);
 			}
 			if (
 				attributes.privateArrayStore !== undefined &&
