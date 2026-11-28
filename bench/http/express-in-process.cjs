@@ -52,7 +52,32 @@ const cases = [
 		body: '{"body":{"name":"Maligator","role":"runtime"}}',
 	},
 ];
-const mix = [0, 1, 2, 3, 4, 5, 6, 6, 7, 7];
+const routeCases = [0, 1, 2, 3, 4, 5];
+const jsonCase = 6;
+const formCase = 7;
+// EXPRESS_MIX="routes/json/forms" weights, such as "20/40/40", gives a training run a
+// different request mix. Each weight cycle repeats once per route case so every route
+// keeps an equal share.
+function requestMix(spec) {
+	if (spec === undefined) return [0, 1, 2, 3, 4, 5, 6, 6, 7, 7];
+	const weights = /^\d+\/\d+\/\d+$/.test(spec) ? spec.split("/").map(Number) : [];
+	const divisor = weights.reduce((left, right) => {
+		while (right !== 0) [left, right] = [right, left % right];
+		return left;
+	}, 0);
+	if (divisor === 0)
+		throw new Error("Invalid in-process Express benchmark configuration");
+	const [routes, json, forms] = weights.map((weight) => weight / divisor);
+	const cycle = [];
+	for (let repeat = 0; repeat < routeCases.length; repeat++) {
+		for (let slot = 0; slot < routes; slot++)
+			cycle.push(routeCases[(repeat * routes + slot) % routeCases.length]);
+		for (let slot = 0; slot < json; slot++) cycle.push(jsonCase);
+		for (let slot = 0; slot < forms; slot++) cycle.push(formCase);
+	}
+	return cycle;
+}
+const mix = requestMix(process.env.EXPRESS_MIX);
 const mode = process.env.EXPRESS_IN_PROCESS_MODE || "parsed";
 const requestCount = Number(process.env.EXPRESS_REQUESTS || 20000);
 const durationMs = Number(process.env.EXPRESS_DURATION_MS || 0);

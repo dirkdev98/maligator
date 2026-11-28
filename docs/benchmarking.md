@@ -235,7 +235,9 @@ when investigating older history.
 For Express JavaScript profiles without sockets or HTTP parsing, run
 `bench/http/express-in-process.cjs`. It calls the existing Express fixture through
 `app.handle()`, checks response bodies and statuses on every request, and prints
-JSON timings and response oracles. The mix is 60% routes, 20% JSON, and 20% forms.
+JSON timings and response oracles. The mix is 60% routes, 20% JSON, and 20% forms;
+`EXPRESS_MIX=20/40/40` sets other route/JSON/form weights, so a feedback training run
+can differ from the measured workload.
 
 ```sh
 node src/index.ts build bench/http/express-in-process.cjs --production \
