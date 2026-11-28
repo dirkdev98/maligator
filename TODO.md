@@ -128,6 +128,19 @@ static generated-code size and helper counts do not establish runtime cost.
       saves 99 to 137 per call on small bodies, so the open question is which sites
       deserve the budget.
 
+- [ ] Inline guarded call targets recorded by `run --feedback` once the inliner takes
+      the bodies that matter. A prototype that inlined every single-target Express call
+      site from a training recording reached -1.55% retired instructions parsed and
+      -0.84% raw (+0.62% code), against -0.62% and -0.60% for a static build with the
+      same extra code budget; also mapping `loadCallee` to the admitted callee reached
+      -1.75% and -0.80%. Weighted by executions, 70% of single-target sites still
+      decline: callees reading captured cells of another module or a per-request
+      closure (24%; needs a read through the admitted closure's `creation_env`), callees
+      that create closures (19%), loops in guarded copies (14%), try/catch and size (7%).
+      A consumer also needs hotness, which the feedback format doesn't record, and its
+      own code budget. Inlining a constructor call currently drops the number fact of a
+      field read after it.
+
 - [ ] Extend the String method chain's guarded direct form to `re.test` on a
       const-bound regexp and to the guarded String sites it still misses (43 of 287 on
       Express: span exclusions, method loads in another block, and loads with several
