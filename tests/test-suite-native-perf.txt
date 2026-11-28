@@ -83,6 +83,7 @@ tests/native/regexp-batch-collection.test.ts
 tests/native/regexp-case-span.test.ts
 tests/native/regexp-direct-test.test.ts
 tests/native/shape-case-load.test.ts
+tests/native/static-store-hit-barriers.test.ts
 tests/native/string-char-code-at-direct.test.ts
 tests/native/string-cursor-frontier.test.ts
 tests/native/string-flat-transforms.test.ts
