@@ -447,6 +447,11 @@ distinct when measuring text work.
       only keys interned pattern strings, so `new RegExp(source)` with a computed
       `source` recompiles on every call, even when the same text repeats.
 
+- [ ] Shorten the C entry of `RegExp.prototype.exec`. With anchored route patterns
+      rejected on their prefix, a route miss costs about 250 instructions against
+      Node's 86, most of it in the C exec entry: the `lastIndex` read, string
+      flattening and the engine call.
+
 - [ ] Reuse one-unit strings above 0xFF. `mal_intrinsic_code_unit` caches units up to
       0xFF only, so `str[i]`, `charAt`, `for...of` and the String iterator allocate a
       new string for every other BMP character, and a surrogate pair always allocates.

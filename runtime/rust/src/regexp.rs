@@ -248,7 +248,27 @@ struct FastPattern {
     capture_count: usize,
     /// Units a match can begin with, when every match consumes one.
     first: Option<FastClass>,
+    /// Units every match begins with, which a search confined to one position
+    /// tests before preparing captures or entering the plan.
+    prefix: Box<[FastPrefixUnit]>,
+    /// How far past the match start the plan begins. An anchored plan omits the
+    /// leading prefix units outside capture groups, which the prefix test has
+    /// already compared.
+    plan_offset: usize,
 }
+
+/// A subject unit `u` passes when `u | fold == unit`. A fold of 0x20 admits exactly
+/// `unit` and `unit - 0x20`, such as both cases of an ASCII letter under `i`.
+#[derive(Debug, Clone, Copy)]
+struct FastPrefixUnit {
+    unit: u16,
+    fold: u16,
+}
+
+/// Distinct routes and tokens usually differ within their first units. A match
+/// compares prefix units again where the plan keeps them, inside a capture group
+/// or in a sticky search, so the prefix stays short.
+const FAST_PREFIX_LIMIT: usize = 8;
 
 /// Subject storage the allocation-free plans can scan directly. Plans contain
 /// only ASCII units, so compact Latin-1 bytes compare exactly like their UTF-16
@@ -513,9 +533,10 @@ impl FastPattern {
     ) -> bool {
         let (range, captures) = slots.split_at_mut(2);
         let captures = &mut captures[..self.capture_count * 2];
+        let position = start + self.plan_offset;
         let matched = match &self.program {
-            FastProgram::Linear(ops) => Self::match_linear(ops, subject, start, captures),
-            FastProgram::Tree(nodes) => Self::match_nodes(nodes, subject, start, captures),
+            FastProgram::Linear(ops) => Self::match_linear(ops, subject, position, captures),
+            FastProgram::Tree(nodes) => Self::match_nodes(nodes, subject, position, captures),
         };
         match matched {
             Some(end) => {
@@ -533,8 +554,36 @@ impl FastPattern {
         }
     }
 
+    /// Whether a search that `^` or stickiness confines to one position fails there
+    /// without running the plan. Without the `m` flag `^` matches only at index 0.
+    #[inline(always)]
+    fn rejects_single_position<U: SubjectUnit>(
+        &self,
+        subject: &[U],
+        start: usize,
+        at_start_only: bool,
+    ) -> bool {
+        let position = if self.anchored_start {
+            if start != 0 {
+                return true;
+            }
+            0
+        } else if at_start_only {
+            start
+        } else {
+            return false;
+        };
+        let Some(units) = subject.get(position..position + self.prefix.len()) else {
+            return true;
+        };
+        self.prefix
+            .iter()
+            .zip(units)
+            .any(|(expected, unit)| unit.code_unit() | expected.fold != expected.unit)
+    }
+
     /// Writes the match range and its groups' ranges into `slots`, the layout the
-    /// engine's caller copies out.
+    /// engine's caller copies out. After a failed search the slots hold no result.
     fn find<U: SubjectUnit>(
         &self,
         subject: &[U],
@@ -542,7 +591,10 @@ impl FastPattern {
         slots: &mut [i32; FAST_CAPTURE_SLOTS],
         at_start_only: bool,
     ) -> bool {
-        if let FastProgram::Tree(nodes) = &self.program {
+        if self.rejects_single_position(subject, start, at_start_only) {
+            return false;
+        }
+        if let (FastProgram::Tree(nodes), 0) = (&self.program, self.plan_offset) {
             if let [FastNode::EndOrClass(class)] = nodes.as_ref() {
                 let mut position = start;
                 while position < subject.len() && !class.contains(subject[position].code_unit()) {
@@ -550,9 +602,6 @@ impl FastPattern {
                         return false;
                     }
                     position += 1;
-                }
-                if self.anchored_start && start != 0 {
-                    return false;
                 }
                 slots[0] = position as i32;
                 slots[1] = position as i32;
@@ -568,7 +617,7 @@ impl FastPattern {
             }
         }
         if self.anchored_start {
-            return start == 0 && self.match_at(subject, 0, slots);
+            return self.match_at(subject, 0, slots);
         }
         if at_start_only {
             return self.match_at(subject, start, slots);
@@ -683,6 +732,114 @@ fn fast_follow(nodes: &[FastNode], outer: &FastClass) -> FastClass {
         (first, FastFirstEnd::Nullable) => first.union(outer),
         (first, _) => first,
     }
+}
+
+impl FastPrefixUnit {
+    /// The entry for a class of one unit or of two units that differ only in bit 0x20.
+    fn of_class(class: &FastClass) -> Option<Self> {
+        if !class.high.is_empty() {
+            return None;
+        }
+        let mut units = (0u16..256).filter(|unit| class.contains(*unit));
+        let unit = units.next()?;
+        match (units.next(), units.next()) {
+            (None, _) => Some(Self { unit, fold: 0 }),
+            (Some(other), None) if other == unit | 0x20 => Some(Self {
+                unit: other,
+                fold: 0x20,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Appends the units every match of `nodes` begins with, up to `FAST_PREFIX_LIMIT`.
+/// Returns whether all of `nodes` had a fixed width, so that what follows them
+/// still starts at a known offset and may extend the prefix.
+fn fast_prefix(nodes: &[FastNode], prefix: &mut Vec<FastPrefixUnit>) -> bool {
+    for node in nodes {
+        let (entry, count, fixed) = match node {
+            FastNode::Literal(literal) => {
+                for &unit in literal.iter() {
+                    if prefix.len() == FAST_PREFIX_LIMIT {
+                        return false;
+                    }
+                    prefix.push(FastPrefixUnit { unit, fold: 0 });
+                }
+                continue;
+            }
+            FastNode::Repeat {
+                class, min, max, ..
+            } => match FastPrefixUnit::of_class(class) {
+                Some(entry) => (entry, *min as usize, min == max),
+                None => return false,
+            },
+            FastNode::Group {
+                body,
+                optional: false,
+                ..
+            } => {
+                if !fast_prefix(body, prefix) {
+                    return false;
+                }
+                continue;
+            }
+            _ => return false,
+        };
+        let room = FAST_PREFIX_LIMIT - prefix.len();
+        prefix.extend(core::iter::repeat_n(entry, count.min(room)));
+        if !fixed || count > room {
+            return false;
+        }
+    }
+    true
+}
+
+/// Removes the nodes of up to `count` leading units that a passed prefix test has
+/// compared, stopping at a capture group, whose start the plan records. A repeat
+/// keeps its optional remainder. Returns the number of units removed.
+fn strip_prefix(nodes: &mut Vec<FastNode>, count: usize) -> usize {
+    let mut stripped = 0;
+    while stripped < count {
+        let Some(node) = nodes.first_mut() else {
+            break;
+        };
+        let consumed = match node {
+            FastNode::Literal(literal) => {
+                let take = literal.len().min(count - stripped);
+                stripped += take;
+                *literal = literal[take..].into();
+                literal.is_empty()
+            }
+            FastNode::Repeat { min, max, .. } => {
+                let take = (*min as usize).min(count - stripped);
+                stripped += take;
+                *min -= take as u32;
+                if *max != u32::MAX {
+                    *max -= take as u32;
+                }
+                *max == 0
+            }
+            FastNode::Group {
+                body,
+                capture: None,
+                optional: false,
+                ..
+            } => {
+                let mut inner = core::mem::take(body).into_vec();
+                stripped += strip_prefix(&mut inner, count - stripped);
+                let consumed = inner.is_empty();
+                *body = inner.into();
+                consumed
+            }
+            _ => break,
+        };
+        if !consumed {
+            break;
+        }
+        nodes.remove(0);
+    }
+    stripped
 }
 
 /// Greedy matching equals ECMAScript backtracking when no quantified class shares a unit
@@ -1230,7 +1387,7 @@ fn compile_fast_pattern(units: &[u16], flags: u32) -> Option<FastPattern> {
         capture_count: 0,
         fold_ascii_case: flags & FLAG_IGNORE_CASE != 0,
     };
-    let nodes = parser.alternation()?;
+    let mut nodes = parser.alternation()?;
     // A leading `^` binds only to the first top-level alternative.
     let top_level_alternation = matches!(nodes.as_slice(), [FastNode::Alternation { .. }]);
     if parser.position != units.len()
@@ -1243,6 +1400,13 @@ fn compile_fast_pattern(units: &[u16], flags: u32) -> Option<FastPattern> {
     let first = match fast_first(&nodes) {
         (first, FastFirstEnd::Consumes) => Some(first),
         _ => None,
+    };
+    let mut prefix = Vec::new();
+    fast_prefix(&nodes, &mut prefix);
+    let plan_offset = if anchored_start {
+        strip_prefix(&mut nodes, prefix.len())
+    } else {
+        0
     };
     // Capture fusion pays for the program dispatch. Capture-free plans keep the
     // tree executor, avoiding lowering and dispatch costs when no writes fuse.
@@ -1257,6 +1421,8 @@ fn compile_fast_pattern(units: &[u16], flags: u32) -> Option<FastPattern> {
         program,
         capture_count: parser.capture_count,
         first,
+        prefix: prefix.into(),
+        plan_offset,
     })
 }
 
@@ -1772,17 +1938,21 @@ fn fast_exec_latin1(
 ) -> i32 {
     // A failed search can visit every position even for an admitted plan. Share
     // the general executor's bounded content memo without allocating on matches.
-    if cp
-        .result_memo
-        .as_ref()
-        .is_some_and(|memo| matches!(memo.lookup(subject, start), Some(None)))
+    // A search confined to one position makes a single attempt, which never
+    // backtracks and so costs no more than the memo's subject comparison and copy.
+    let one_position = cp.sticky || cp.fast.as_ref().is_some_and(|fast| fast.anchored_start);
+    if !one_position
+        && cp
+            .result_memo
+            .as_ref()
+            .is_some_and(|memo| matches!(memo.lookup(subject, start), Some(None)))
     {
         cp.last = None;
         cp.fast_last_groups = 0;
         return 0;
     }
     let groups = fast_exec(cp, subject, start, caps_out, caps_cap);
-    if groups == 0 && start < subject.len() {
+    if groups == 0 && !one_position && start < subject.len() {
         remember_fast_miss(cp, subject, start);
     }
     groups
@@ -2947,8 +3117,17 @@ mod tests {
         subject: &[U],
         start: usize,
     ) -> Option<Vec<Option<(usize, usize)>>> {
+        fast_search_ranges(fast, subject, start, false)
+    }
+
+    fn fast_search_ranges<U: SubjectUnit>(
+        fast: &FastPattern,
+        subject: &[U],
+        start: usize,
+        sticky: bool,
+    ) -> Option<Vec<Option<(usize, usize)>>> {
         let mut slots = [0; FAST_CAPTURE_SLOTS];
-        fast.find(subject, start, &mut slots, false).then(|| {
+        fast.find(subject, start, &mut slots, sticky).then(|| {
             (0..=fast.capture_count)
                 .map(|index| {
                     (slots[index * 2] >= 0)
@@ -2956,6 +3135,61 @@ mod tests {
                 })
                 .collect()
         })
+    }
+
+    /// Renders a prefix with each folded pair as a bracketed class, then the plan offset.
+    fn prefix_summary(pattern: &str, flags: u32) -> (String, usize) {
+        let fast = compile_fast_pattern(&utf16(pattern), flags)
+            .unwrap_or_else(|| panic!("{pattern} has no fast plan"));
+        let text = fast
+            .prefix
+            .iter()
+            .map(|entry| {
+                let unit = char::from_u32(u32::from(entry.unit)).unwrap();
+                if entry.fold == 0 {
+                    unit.to_string()
+                } else {
+                    let other = char::from_u32(u32::from(entry.unit & !entry.fold)).unwrap();
+                    format!("[{other}{unit}]")
+                }
+            })
+            .collect();
+        (text, fast.plan_offset)
+    }
+
+    #[test]
+    fn plans_record_the_units_every_match_begins_with() {
+        for (pattern, flags, prefix, offset) in [
+            (
+                r"^(?:\/users\/([^\/]+))(?:\/$)?$",
+                FLAG_IGNORE_CASE,
+                "/[Uu][Ss][Ee][Rr][Ss]/",
+                7,
+            ),
+            (
+                r"^\/users\/(?:([^\/]+?))\/?$",
+                FLAG_IGNORE_CASE,
+                "/[Uu][Ss][Ee][Rr][Ss]/",
+                7,
+            ),
+            (r"^(?:\/json)(?:\/$)?$", 0, "/json", 5),
+            (r"^\/(users)\/(\d+)", 0, "/users/", 1),
+            (r"^a{2,4}b", 0, "aa", 2),
+            (r"^abcdefghijkl", 0, "abcdefgh", 8),
+            (r"^[@`]x", 0, "[@`]x", 2),
+            (r"^\[x", FLAG_IGNORE_CASE, "[[Xx]", 2),
+            (r"users\/(\d+)", 0, "users/", 0),
+            (r"^(?:api\/)?users", 0, "", 0),
+            (r"^\/(?:json|form)", 0, "/", 1),
+            (r"^[a-c]x", 0, "", 0),
+            (r"^\/assets(?=$|\/)", 0, "/assets", 7),
+        ] {
+            assert_eq!(
+                prefix_summary(pattern, flags),
+                (prefix.to_string(), offset),
+                "{pattern}"
+            );
+        }
     }
 
     #[test]
@@ -3097,6 +3331,19 @@ mod tests {
             (r#"((ab)(c+))$"#, "xabccc", 0),
             (r#"((a{0})b)"#, "bab", 0),
             (r#"([\u0000-\uffff]+)"#, "aΣé", 0),
+            (r#"users\/(\d+)"#, "/v1/users/42", FLAG_IGNORE_CASE),
+            (r#"^(?:api\/)?users"#, "api/users", 0),
+            (r#"^\/(?:json|form)\/x"#, "/FORM/X", FLAG_IGNORE_CASE),
+            (r#"^a{2,4}b"#, "aaaab", 0),
+            (r#"^x+y"#, "xXy", FLAG_IGNORE_CASE),
+            (r#"^abcdefghijkl"#, "ABCDEFGHIJKL", FLAG_IGNORE_CASE),
+            (r#"^\/(users)\/(\d+)"#, "/USERS/9", FLAG_IGNORE_CASE),
+            (r#"^\/assets(?=$|\/)"#, "/assets/x", FLAG_IGNORE_CASE),
+            (r#"^[@`]x"#, "`x", 0),
+            (r#"^[\u00c0\u00e0]b"#, "\u{e0}b", 0),
+            (r#"^\[x"#, "[x", FLAG_IGNORE_CASE),
+            (r#"^\u00e9+x"#, "\u{e9}x", 0),
+            (r#"^ab"#, "ab", 0),
         ];
         let extras = [
             'a', 'b', 'c', 'x', 'y', 'Z', '0', '9', ' ', '/', ';', '=', ',', '-', '.', '\t',
@@ -3160,10 +3407,20 @@ mod tests {
                             }));
                             ranges
                         });
+                    // A sticky search succeeds exactly when the search from `start`
+                    // finds its first match there.
+                    let sticky = expected
+                        .clone()
+                        .filter(|ranges| ranges[0].is_some_and(|(begin, _)| begin == start));
                     assert_eq!(
                         fast_match_ranges(&fast, &subject[..], start),
                         expected,
                         "{pattern} on {subject:?} from {start}"
+                    );
+                    assert_eq!(
+                        fast_search_ranges(&fast, &subject[..], start, true),
+                        sticky,
+                        "{pattern} sticky on {subject:?} from {start}"
                     );
                     if subject.iter().all(|unit| *unit <= 0xff) {
                         let bytes: Vec<u8> = subject.iter().map(|unit| *unit as u8).collect();
@@ -3171,6 +3428,11 @@ mod tests {
                             fast_match_ranges(&fast, &bytes[..], start),
                             expected,
                             "{pattern} on Latin-1 {subject:?} from {start}"
+                        );
+                        assert_eq!(
+                            fast_search_ranges(&fast, &bytes[..], start, true),
+                            sticky,
+                            "{pattern} sticky on Latin-1 {subject:?} from {start}"
                         );
                     }
                 }
