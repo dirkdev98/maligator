@@ -589,11 +589,6 @@ distinct when measuring text work.
 
 ## Active correctness clusters
 
-- [ ] Convert a computed key once for the read and once for the write in compound
-      assignment. For `o[k] += 1`, current ECMAScript keeps the raw key in the
-      reference and converts it in both GetValue and PutValue, so Node calls
-      `k.toString()` twice; Maligator converts it once.
-
 - [ ] Resolve Intl locale availability and matching per service from bundled data.
       Preserve requested-locale order, lookup and best-fit semantics, relevant Unicode
       extensions and observable option coercion. Provider fallback alone does not prove
