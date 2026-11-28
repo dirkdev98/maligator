@@ -1,10 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPool, createWorkerUrl } from "maligator:workers";
 import { restoreCompilerResult } from "../../../src/compiler-profile-result.ts";
-import { createProfileCapture } from "../../../src/profile-artifact.ts";
-import type { ProfileMetadata } from "../../../src/profile-artifact.ts";
+import { createProfileCapture, PreparedProfile } from "../../../src/profile-artifact.ts";
 import type { produce, raw } from "./worker.mts";
 
 type ProfileWorker = { produce: typeof produce; raw: typeof raw };
@@ -40,9 +39,9 @@ try {
 		directory,
 		join(directory, "capture"),
 	);
-	const metadata = JSON.parse(
-		readFileSync(join(capture.directory, "metadata.json"), "utf8"),
-	) as ProfileMetadata;
+	const metadata = PreparedProfile.fromFile(
+		join(capture.directory, "metadata.jsonl"),
+	).readMetadata();
 	if (
 		metadata.functions.length !== response.count ||
 		metadata.functions.at(-1)?.name !== response.lastName

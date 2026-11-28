@@ -1,16 +1,20 @@
-import { hash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, hash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { writeFileAtomically } from "./atomic-file.ts";
 import type { CoreOptimizationPlan } from "./compiler/core/core-ir-regions.ts";
 import type { CoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
 import type { CompilerFactFlowReport } from "./compiler/shared/compiler-diagnostics.ts";
-import type { CompilerRemark, ProfileSite } from "./compiler/target/profile-metadata.ts";
+import type {
+	CompilerRemark,
+	ProfileInlineFrame,
+	ProfileSite,
+} from "./compiler/target/profile-metadata.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { profilePhaseName } from "./profile-phases.ts";
 import {
 	SourceProfileIdentities,
-	hashCanonicalProfileJson,
+	canonicalProfileJson,
 } from "./source-profile-identity.ts";
 import type {
 	ProfileFunctionIdentity,
@@ -83,7 +87,7 @@ const ALLOCATION_FAMILY_NAMES = [
 ];
 
 export interface ProfileMetadata {
-	schema: 8;
+	schema: 9;
 	calls: Array<{
 		file: string;
 		line: number;
@@ -113,46 +117,438 @@ export interface ProfileOptimizationSidecar {
 	readonly coreOptimizationPlan?: CoreOptimizationPlan;
 }
 
+/*
+ * The metadata sidecar is JSON Lines, so no step holds the whole sidecar in one
+ * string: a self-compile census is several hundred MB, beyond V8's string limit.
+ * The first line is an envelope with the capture identity, the SHA-256 of every
+ * byte after it. Then come a header line and sections. A section line names its
+ * path and either carries the value, or announces `items` element lines, or names
+ * an interned encoding with its tables. Every line is canonical JSON, so equal
+ * metadata always has equal bytes and identity.
+ */
+const PROFILE_METADATA_FORMAT = "maligator-profile-metadata";
+/** Large profile files are built from strings of about this many UTF-16 units. */
+const PROFILE_CHUNK_UNITS = 8 * 1024 * 1024;
+
+type ProfileMetadataHeader = Pick<
+	ProfileMetadata,
+	"buildId" | "entrypoint" | "mode" | "schema"
+>;
+
+type ProfileMetadataSection =
+	| { readonly path: ReadonlyArray<string>; readonly value: unknown }
+	| { readonly path: ReadonlyArray<string>; readonly items: number }
+	| {
+			readonly path: ReadonlyArray<string>;
+			readonly encoding: "interned-sites";
+			readonly strings: number;
+			readonly positions: number;
+			readonly items: number;
+	  }
+	| {
+			readonly path: ReadonlyArray<string>;
+			readonly encoding: "interned-remarks";
+			readonly bodies: number;
+			readonly items: number;
+	  };
+
+/** `[positionId, line, column, file string, regionId, flattened inline chain]` */
+type EncodedProfilePosition = [number, number, number, number, string, Array<number>];
+/** `[functionIndex, instructionIndex, position, operation string, logicalId, originId, instanceId]` */
+type EncodedProfileSite = [number, number, number, number, string, string, string];
+
+class ProfileMetadataLines {
+	readonly #chunks: Array<string> = [];
+	readonly #digest = createHash("sha256");
+	#parts: Array<string> = [];
+	#units = 0;
+
+	add(line: string): void {
+		this.#parts.push(line, "\n");
+		this.#units += line.length + 1;
+		if (this.#units >= PROFILE_CHUNK_UNITS) this.#flush();
+	}
+
+	finish(): { chunks: ReadonlyArray<string>; identity: string } {
+		this.#flush();
+		return { chunks: this.#chunks, identity: this.#digest.digest("hex") };
+	}
+
+	#flush(): void {
+		if (this.#parts.length === 0) return;
+		const chunk = this.#parts.join("");
+		this.#digest.update(chunk);
+		this.#chunks.push(chunk);
+		this.#parts = [];
+		this.#units = 0;
+	}
+}
+
+function isMetadataRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function internedIndex(table: Map<string, number>, key: string): number {
+	let index = table.get(key);
+	if (index === undefined) {
+		index = table.size;
+		table.set(key, index);
+	}
+	return index;
+}
+
+function sortedMetadataEntries(value: object): Array<[string, unknown]> {
+	return Object.entries(value)
+		.filter(([, entry]) => entry !== undefined)
+		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+}
+
+/** Arrays become one line per element, and top-level objects one section per field;
+ * those are where the large plan and fact-flow tables live. */
+function encodeMetadataSection(
+	lines: ProfileMetadataLines,
+	path: ReadonlyArray<string>,
+	value: unknown,
+): void {
+	if (Array.isArray(value)) {
+		lines.add(canonicalProfileJson({ items: value.length, path }));
+		for (const item of value as Array<unknown>)
+			lines.add(canonicalProfileJson(item ?? null));
+	} else if (path.length === 1 && isMetadataRecord(value)) {
+		lines.add(canonicalProfileJson({ path, value: {} }));
+		for (const [key, child] of sortedMetadataEntries(value))
+			encodeMetadataSection(lines, [...path, key], child);
+	} else {
+		lines.add(canonicalProfileJson({ path, value }));
+	}
+}
+
+/** Most sites share their file, operation, and source position with many others,
+ * so positions (with their region and inline chain) and strings are tables the
+ * site rows reference by index. */
+function encodeMetadataSites(
+	lines: ProfileMetadataLines,
+	sites: ReadonlyArray<ProfileSite>,
+): void {
+	const strings = new Map<string, number>();
+	const positions = new Map<string, number>();
+	const sitePositions = new Int32Array(sites.length);
+	for (const [index, site] of sites.entries()) {
+		if (site.id !== index)
+			throw new Error("profile site IDs must equal their table index");
+		const position: EncodedProfilePosition = [
+			site.positionId,
+			site.line,
+			site.column,
+			internedIndex(strings, site.file),
+			site.regionId,
+			site.inlineChain.flatMap((frame) => [frame.functionIndex, frame.positionId]),
+		];
+		sitePositions[index] = internedIndex(positions, JSON.stringify(position));
+		internedIndex(strings, site.operation);
+	}
+	lines.add(
+		canonicalProfileJson({
+			encoding: "interned-sites",
+			items: sites.length,
+			path: ["sites"],
+			positions: positions.size,
+			strings: strings.size,
+		}),
+	);
+	for (const text of strings.keys()) lines.add(JSON.stringify(text));
+	for (const position of positions.keys()) lines.add(position);
+	for (const [index, site] of sites.entries()) {
+		const row: EncodedProfileSite = [
+			site.functionIndex,
+			site.instructionIndex,
+			sitePositions[index]!,
+			strings.get(site.operation)!,
+			site.logicalId,
+			site.originId,
+			site.instanceId,
+		];
+		lines.add(JSON.stringify(row));
+	}
+}
+
+/** Remarks repeat a small set of decisions across many sites. */
+function encodeMetadataRemarks(
+	lines: ProfileMetadataLines,
+	remarks: ReadonlyArray<CompilerRemark>,
+): void {
+	const bodies = new Map<string, number>();
+	const remarkBodies = new Int32Array(remarks.length);
+	for (const [index, remark] of remarks.entries()) {
+		const { siteId: _siteId, ...body } = remark;
+		remarkBodies[index] = internedIndex(bodies, canonicalProfileJson(body));
+	}
+	lines.add(
+		canonicalProfileJson({
+			bodies: bodies.size,
+			encoding: "interned-remarks",
+			items: remarks.length,
+			path: ["remarks"],
+		}),
+	);
+	for (const body of bodies.keys()) lines.add(body);
+	for (const [index, remark] of remarks.entries())
+		lines.add(JSON.stringify([remark.siteId, remarkBodies[index]!]));
+}
+
+function encodeProfileMetadata(metadata: ProfileMetadata): {
+	chunks: ReadonlyArray<string>;
+	identity: string;
+} {
+	const {
+		buildId,
+		entrypoint,
+		mode,
+		schema,
+		captureIdentity: _captureIdentity,
+		sites,
+		remarks,
+		...sections
+	} = metadata;
+	const lines = new ProfileMetadataLines();
+	const header: ProfileMetadataHeader = { buildId, entrypoint, mode, schema };
+	lines.add(canonicalProfileJson(header));
+	for (const [key, value] of sortedMetadataEntries(sections))
+		encodeMetadataSection(lines, [key], value);
+	encodeMetadataRemarks(lines, remarks);
+	encodeMetadataSites(lines, sites);
+	return lines.finish();
+}
+
+function* profileMetadataLines(chunks: Iterable<string>): Generator<string> {
+	for (const chunk of chunks) {
+		let start = 0;
+		while (start < chunk.length) {
+			const end = chunk.indexOf("\n", start);
+			if (end < 0) throw new Error("profile metadata is truncated");
+			yield chunk.slice(start, end);
+			start = end + 1;
+		}
+	}
+}
+
+function metadataTableEntry<T>(
+	table: ReadonlyArray<T>,
+	index: unknown,
+	label: string,
+): T {
+	const entry = typeof index === "number" ? table[index] : undefined;
+	if (entry === undefined)
+		throw new Error(`profile metadata references a missing ${label}`);
+	return entry;
+}
+
+function decodeMetadataSites(
+	section: Extract<ProfileMetadataSection, { encoding: "interned-sites" }>,
+	next: () => unknown,
+): Array<ProfileSite> {
+	const strings = Array.from({ length: section.strings }, () => next() as string);
+	const positions = Array.from({ length: section.positions }, () => {
+		const [positionId, line, column, file, regionId, chain] =
+			next() as EncodedProfilePosition;
+		const inlineChain: Array<ProfileInlineFrame> = [];
+		for (let index = 0; index + 1 < chain.length; index += 2)
+			inlineChain.push(
+				Object.freeze({
+					functionIndex: chain[index]!,
+					positionId: chain[index + 1]!,
+				}),
+			);
+		return {
+			positionId,
+			line,
+			column,
+			file: metadataTableEntry(strings, file, "site string"),
+			regionId,
+			inlineChain: Object.freeze(inlineChain),
+		};
+	});
+	return Array.from({ length: section.items }, (_, id): ProfileSite => {
+		const [
+			functionIndex,
+			instructionIndex,
+			positionIndex,
+			operation,
+			logicalId,
+			originId,
+			instanceId,
+		] = next() as EncodedProfileSite;
+		const position = metadataTableEntry(positions, positionIndex, "site position");
+		return {
+			id,
+			logicalId,
+			originId,
+			instanceId,
+			regionId: position.regionId,
+			functionIndex,
+			instructionIndex,
+			positionId: position.positionId,
+			file: position.file,
+			line: position.line,
+			column: position.column,
+			operation: metadataTableEntry(strings, operation, "site string"),
+			inlineChain: position.inlineChain,
+		};
+	});
+}
+
+function decodeMetadataRemarks(
+	section: Extract<ProfileMetadataSection, { encoding: "interned-remarks" }>,
+	next: () => unknown,
+): Array<CompilerRemark> {
+	const bodies = Array.from(
+		{ length: section.bodies },
+		() => next() as Omit<CompilerRemark, "siteId">,
+	);
+	return Array.from({ length: section.items }, () => {
+		const [siteId, body] = next() as [number, number];
+		return { siteId, ...metadataTableEntry(bodies, body, "remark body") };
+	});
+}
+
+function assignMetadataPath(
+	root: Record<string, unknown>,
+	path: ReadonlyArray<string>,
+	value: unknown,
+): void {
+	const key = path.at(-1);
+	if (key === undefined || path.includes("__proto__"))
+		throw new Error("profile metadata section has an invalid path");
+	let target = root;
+	for (const parent of path.slice(0, -1)) {
+		const child = target[parent];
+		if (!isMetadataRecord(child))
+			throw new Error("profile metadata section precedes its parent");
+		target = child;
+	}
+	target[key] = value;
+}
+
+function decodeProfileMetadata(chunks: Iterable<string>): ProfileMetadata {
+	const lines = profileMetadataLines(chunks);
+	const next = (): unknown => {
+		const line = lines.next();
+		if (line.done === true) throw new Error("profile metadata is truncated");
+		return JSON.parse(line.value);
+	};
+	const header = next() as ProfileMetadataHeader;
+	if (header.schema !== 9)
+		throw new Error(`profile metadata schema ${String(header.schema)} is unsupported`);
+	const metadata: Record<string, unknown> = { ...header };
+	for (let line = lines.next(); line.done !== true; line = lines.next()) {
+		const section = JSON.parse(line.value) as ProfileMetadataSection;
+		let value: unknown;
+		if ("encoding" in section) {
+			if (section.encoding === "interned-sites")
+				value = decodeMetadataSites(section, next);
+			else if (section.encoding === "interned-remarks")
+				value = decodeMetadataRemarks(section, next);
+			else throw new Error("profile metadata section encoding is unsupported");
+		} else if ("items" in section) {
+			value = Array.from({ length: section.items }, next);
+		} else {
+			value = section.value;
+		}
+		assignMetadataPath(metadata, section.path, value);
+	}
+	return metadata as unknown as ProfileMetadata;
+}
+
+/** Split UTF-8 metadata at line ends; a newline byte never occurs inside a
+ * multi-byte sequence. */
+function profileMetadataChunks(bytes: Buffer): Array<string> {
+	const chunks: Array<string> = [];
+	let start = 0;
+	while (start < bytes.length) {
+		let end = Math.min(bytes.length, start + PROFILE_CHUNK_UNITS);
+		if (end < bytes.length) {
+			const newline = bytes.indexOf(0x0a, end - 1);
+			end = newline < 0 ? bytes.length : newline + 1;
+		}
+		chunks.push(bytes.toString("utf8", start, end));
+		start = end;
+	}
+	if (bytes.at(-1) !== 0x0a) throw new Error("profile metadata is truncated");
+	return chunks;
+}
+
+function profileMetadataHeader(chunks: ReadonlyArray<string>): ProfileMetadataHeader {
+	const end = chunks[0]?.indexOf("\n") ?? -1;
+	if (end < 0) throw new Error("profile metadata is truncated");
+	const header = JSON.parse(chunks[0]!.slice(0, end)) as ProfileMetadataHeader;
+	if (header.schema !== 9)
+		throw new Error(`profile metadata schema ${String(header.schema)} is unsupported`);
+	return header;
+}
+
 /** Owns the exact metadata bytes so later compiler edits cannot alter a capture. */
 export class PreparedProfile {
 	readonly buildId: string;
 	readonly captureIdentity: string;
 	readonly entrypoint: string;
 	readonly mode: ProfileMetadata["mode"];
-	readonly #json: string;
+	readonly #chunks: ReadonlyArray<string>;
 
-	private constructor(json: string, metadata: ProfileMetadata, identity: string) {
-		this.#json = json;
-		this.buildId = metadata.buildId;
+	private constructor(
+		header: ProfileMetadataHeader,
+		identity: string,
+		chunks: ReadonlyArray<string>,
+	) {
+		this.#chunks = chunks;
+		this.buildId = header.buildId;
 		this.captureIdentity = identity;
-		this.entrypoint = metadata.entrypoint;
-		this.mode = metadata.mode;
+		this.entrypoint = header.entrypoint;
+		this.mode = header.mode;
 		Object.freeze(this);
 	}
 
 	static fromMetadata(metadata: ProfileMetadata): PreparedProfile {
-		const identity =
-			metadata.captureIdentity === undefined
-				? profileCaptureIdentity(metadata)
-				: validatedCaptureIdentity(metadata);
-		return new PreparedProfile(
-			`${JSON.stringify({ ...metadata, captureIdentity: identity })}\n`,
-			metadata,
-			identity,
-		);
+		const { chunks, identity } = encodeProfileMetadata(metadata);
+		if (metadata.captureIdentity !== undefined && metadata.captureIdentity !== identity)
+			throw new Error("profile metadata capture identity does not match its contents");
+		return new PreparedProfile(metadata, identity, chunks);
 	}
 
-	static fromJson(json: string): PreparedProfile {
-		const metadata = JSON.parse(json) as ProfileMetadata;
-		return new PreparedProfile(json, metadata, validatedCaptureIdentity(metadata));
+	static fromFile(file: string): PreparedProfile {
+		const bytes = readFileSync(file);
+		const envelopeEnd = bytes.indexOf(0x0a);
+		if (envelopeEnd < 0) throw new Error("profile metadata is truncated");
+		let envelope: unknown;
+		try {
+			envelope = JSON.parse(bytes.toString("utf8", 0, envelopeEnd));
+		} catch {
+			envelope = undefined;
+		}
+		if (!isMetadataRecord(envelope) || envelope.format !== PROFILE_METADATA_FORMAT)
+			throw new Error("profile metadata format is unsupported");
+		const identity = envelope.captureIdentity;
+		if (typeof identity !== "string" || !/^[0-9a-f]{64}$/u.test(identity))
+			throw new Error("profile metadata does not contain a valid capture identity");
+		const body = bytes.subarray(envelopeEnd + 1);
+		if (hash("sha256", body, "hex") !== identity)
+			throw new Error("profile metadata capture identity does not match its contents");
+		const chunks = profileMetadataChunks(body);
+		return new PreparedProfile(profileMetadataHeader(chunks), identity, chunks);
 	}
 
 	readMetadata(): ProfileMetadata {
-		return JSON.parse(this.#json) as ProfileMetadata;
+		return {
+			...decodeProfileMetadata(this.#chunks),
+			captureIdentity: this.captureIdentity,
+		};
 	}
 
 	writeMetadata(file: string): void {
-		writeFileAtomically(file, this.#json);
+		const envelope = canonicalProfileJson({
+			captureIdentity: this.captureIdentity,
+			format: PROFILE_METADATA_FORMAT,
+		});
+		writeFileAtomically(file, [`${envelope}\n`, ...this.#chunks]);
 	}
 }
 
@@ -211,25 +607,7 @@ interface CompilerCapture {
 
 /** Content identity binding the linked binary hash to its complete profile sidecar. */
 export function profileCaptureIdentity(prepared: ProfileMetadata): string {
-	const payload = Object.fromEntries(
-		Object.entries(prepared).filter(([key]) => key !== "captureIdentity"),
-	);
-	return hashCanonicalProfileJson(payload);
-}
-
-function validatedCaptureIdentity(prepared: ProfileMetadata): string {
-	const identity = prepared.captureIdentity;
-	if (
-		prepared.schema !== 8 ||
-		identity === undefined ||
-		!/^[0-9a-f]{64}$/u.test(identity)
-	) {
-		throw new Error("profile metadata does not contain a valid capture identity");
-	}
-	if (profileCaptureIdentity(prepared) !== identity) {
-		throw new Error("profile metadata capture identity does not match its contents");
-	}
-	return identity;
+	return encodeProfileMetadata(prepared).identity;
 }
 
 export interface ProfileFinding {
@@ -334,7 +712,7 @@ export function prepareProfile(
 	const resolver = new SourceProfileIdentities();
 	const identities = profileFunctionIdentities(image, resolver);
 	const prepared: ProfileMetadata = {
-		schema: 8,
+		schema: 9,
 		calls: (image.diagnostics.sourceCallSites ?? []).map((site) => ({
 			file: site.file,
 			line: site.line,
@@ -359,7 +737,7 @@ export function prepareProfile(
 		factFlow: image.diagnostics.factFlow,
 	};
 	const snapshot = PreparedProfile.fromMetadata(prepared);
-	snapshot.writeMetadata(`${binaryPath}.profile.json`);
+	snapshot.writeMetadata(`${binaryPath}.profile.jsonl`);
 	return snapshot;
 }
 
@@ -397,7 +775,7 @@ export function createProfileCapture(
 				: override,
 	);
 	mkdirSync(directory, { recursive: true });
-	prepared.writeMetadata(path.join(directory, "metadata.json"));
+	prepared.writeMetadata(path.join(directory, "metadata.jsonl"));
 	const capturePath = path.join(directory, "capture.bin");
 	return {
 		directory,
@@ -985,6 +1363,54 @@ function atomicJson(file: string, value: unknown, compact = false): void {
 	);
 }
 
+/** Group serialized items into strings well below V8's string limit. */
+function* chunkedLines(
+	items: Iterable<string>,
+	separator: string,
+	prefix = "",
+	suffix = "",
+): Generator<string> {
+	let parts: Array<string> = [prefix];
+	let units = prefix.length;
+	let first = true;
+	for (const item of items) {
+		if (!first) parts.push(separator);
+		first = false;
+		parts.push(item);
+		units += item.length + separator.length;
+		if (units >= PROFILE_CHUNK_UNITS) {
+			yield parts.join("");
+			parts = [];
+			units = 0;
+		}
+	}
+	parts.push(suffix);
+	yield parts.join("");
+}
+
+function* jsonValues(values: Iterable<unknown>): Generator<string> {
+	for (const value of values) yield JSON.stringify(value);
+}
+
+/** Compact JSON of `{...head, [key]: items}`, written without one document string. */
+function atomicCompactJsonWithArray(
+	file: string,
+	head: Record<string, unknown>,
+	key: string,
+	items: Iterable<unknown>,
+): void {
+	const prefix = JSON.stringify(head).slice(0, -1);
+	writeFileAtomically(
+		file,
+		chunkedLines(
+			jsonValues(items),
+			",",
+			`${prefix}${prefix === "{" ? "" : ","}${JSON.stringify(key)}:[`,
+			"]}\n",
+		),
+	);
+}
+
 function profileQuality(
 	capture: RawCapture,
 	gc: GcSummary,
@@ -1518,7 +1944,7 @@ export function finalizeProfileCapture(
 	);
 	const compilerFindings = ranked.filter((finding) => finding.compiler !== undefined);
 	if (compiler !== undefined) {
-		atomicJson(
+		atomicCompactJsonWithArray(
 			path.join(directory, "compiler.json"),
 			{
 				schema: 4,
@@ -1532,42 +1958,44 @@ export function finalizeProfileCapture(
 					storageName: allocationStorageName(allocation.storage),
 					familyName: allocationFamilyName(allocation.family),
 				})),
-				sites: compilerFindings.map((finding) => ({
-					siteId: finding.siteId,
-					logicalId: finding.logicalId,
-					originId: finding.originId,
-					instanceId: finding.instanceId,
-					regionId: finding.regionId,
-					file: finding.file,
-					line: finding.line,
-					column: finding.column,
-					functionIndex: finding.functionIndex,
-					instructionIndex: finding.instructionIndex,
-					operation: finding.operation,
-					decisions: finding.decisions,
-					events: finding.compiler,
-					allocations: finding.compilerAllocations?.map((allocation) => ({
-						...allocation,
-						storageName: allocationStorageName(allocation.storage),
-						familyName: allocationFamilyName(allocation.family),
-					})),
-				})),
 			},
-			true,
+			"sites",
+			compilerFindings.map((finding) => ({
+				siteId: finding.siteId,
+				logicalId: finding.logicalId,
+				originId: finding.originId,
+				instanceId: finding.instanceId,
+				regionId: finding.regionId,
+				file: finding.file,
+				line: finding.line,
+				column: finding.column,
+				functionIndex: finding.functionIndex,
+				instructionIndex: finding.instructionIndex,
+				operation: finding.operation,
+				decisions: finding.decisions,
+				events: finding.compiler,
+				allocations: finding.compilerAllocations?.map((allocation) => ({
+					...allocation,
+					storageName: allocationStorageName(allocation.storage),
+					familyName: allocationFamilyName(allocation.family),
+				})),
+			})),
 		);
 	}
-	writeFileSync(
+	writeFileAtomically(
 		path.join(directory, "remarks.jsonl"),
-		prepared.remarks.map((remark) => JSON.stringify(remark)).join("\n") +
-			(prepared.remarks.length === 0 ? "" : "\n"),
+		chunkedLines(
+			jsonValues(prepared.remarks),
+			"\n",
+			"",
+			prepared.remarks.length === 0 ? "" : "\n",
+		),
 	);
-	atomicJson(
+	atomicCompactJsonWithArray(
 		path.join(directory, "summary.json"),
-		{
-			schema: 3,
-			findings: ranked,
-		},
-		true,
+		{ schema: 3 },
+		"findings",
+		ranked,
 	);
 	const truncatedRecords = capture.records.filter((record) => record.omittedFrames > 0);
 	const compilerOverflow =

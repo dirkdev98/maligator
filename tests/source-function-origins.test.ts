@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { ESTree } from "meriyah";
@@ -16,7 +16,7 @@ import {
 } from "../src/compiler/pipeline/compile-core.ts";
 import type { CompileCoreOptions } from "../src/compiler/pipeline/compile-core.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
-import { prepareProfile } from "../src/profile-artifact.ts";
+import { PreparedProfile, prepareProfile } from "../src/profile-artifact.ts";
 import type { ProfileMetadata } from "../src/profile-artifact.ts";
 import { SourceProfileIdentities } from "../src/source-profile-identity.ts";
 import type { ProfileFunctionIdentity } from "../src/source-profile-identity.ts";
@@ -45,7 +45,7 @@ function publish(image: ProgramImage): ProfileMetadata {
 		const binary = path.join(directory, "program");
 		writeFileSync(binary, "identity fixture");
 		const prepared = prepareProfile(binary, image);
-		expect(JSON.parse(readFileSync(`${binary}.profile.json`, "utf8"))).toEqual(
+		expect(PreparedProfile.fromFile(`${binary}.profile.jsonl`).readMetadata()).toEqual(
 			prepared.readMetadata(),
 		);
 		return prepared.readMetadata();

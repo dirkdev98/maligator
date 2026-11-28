@@ -1478,8 +1478,8 @@ function prepareCommandState(
 								? undefined
 								: [
 										{
-											sourcePath: `${binaryPath}.profile.json`,
-											path: "profile.json",
+											sourcePath: `${binaryPath}.profile.jsonl`,
+											path: "profile.jsonl",
 										},
 									],
 					});

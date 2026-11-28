@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { artifactFileDigest } from "./artifact-store.ts";
 import type { BuildCommandResult } from "./cli-commands.ts";
@@ -22,7 +22,7 @@ export function publishCompilerResult(
 	if (profile === undefined) return result;
 	if (value.binaryPath === undefined)
 		throw new Error("profile metadata has no compiled binary");
-	const file = join(directory, "profile.json");
+	const file = join(directory, "profile.jsonl");
 	profile.writeMetadata(file);
 	return {
 		...result,
@@ -42,13 +42,13 @@ export function restoreCompilerResult(
 ): BuildCommandResult {
 	const { profileArtifact, ...result } = value;
 	if (profileArtifact === undefined) return result;
-	const file = join(directory, "profile.json");
+	const file = join(directory, "profile.jsonl");
 	if (
 		statSync(file).size !== profileArtifact.bytes ||
 		artifactFileDigest(file) !== profileArtifact.sha256
 	)
 		throw new Error("compiler profile metadata does not match its published bytes");
-	const profile = PreparedProfile.fromJson(readFileSync(file, "utf8"));
+	const profile = PreparedProfile.fromFile(file);
 	if (
 		profile.buildId !== profileArtifact.buildId ||
 		profile.captureIdentity !== profileArtifact.captureIdentity

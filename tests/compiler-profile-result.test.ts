@@ -22,7 +22,7 @@ it.each([
 		const handoff = join(directory, "handoff");
 		mkdirSync(handoff);
 		const metadata: ProfileMetadata = {
-			schema: 8,
+			schema: 9,
 			mode: "sampling",
 			buildId: "b".repeat(64),
 			entrypoint: "fictional.mjs",
@@ -33,9 +33,9 @@ it.each([
 		};
 		const profile = PreparedProfile.fromMetadata(metadata);
 		const binaryPath = join(directory, "application");
-		profile.writeMetadata(`${binaryPath}.profile.json`);
+		profile.writeMetadata(`${binaryPath}.profile.jsonl`);
 		const message = publishCompilerResult({ binaryPath, profile }, handoff);
-		const file = join(handoff, "profile.json");
+		const file = join(handoff, "profile.jsonl");
 		if (change === "truncated") writeFileSync(file, "{}");
 		else if (change === "replaced")
 			writeFileSync(file, readFileSync(file, "utf8").replace("fictional", "different"));
@@ -59,7 +59,7 @@ it("retains the prepared snapshot across a binary rebuild and handoff removal", 
 	const directory = mkdtempSync(join(tmpdir(), "mal-profile-handoff-"));
 	try {
 		const profile = PreparedProfile.fromMetadata({
-			schema: 8,
+			schema: 9,
 			mode: "sampling",
 			buildId: "a".repeat(64),
 			entrypoint: "fictional.mjs",
@@ -69,7 +69,7 @@ it("retains the prepared snapshot across a binary rebuild and handoff removal", 
 			remarks: [],
 		});
 		const binaryPath = join(directory, "application");
-		writeFileSync(`${binaryPath}.profile.json`, "replaced by a later build");
+		writeFileSync(`${binaryPath}.profile.jsonl`, "replaced by a later build");
 		const handoff = join(directory, "handoff");
 		mkdirSync(handoff);
 		const restored = restoreCompilerResult(
@@ -77,9 +77,11 @@ it("retains the prepared snapshot across a binary rebuild and handoff removal", 
 			handoff,
 		);
 		rmSync(handoff, { recursive: true });
-		const destination = join(directory, "capture-metadata.json");
+		const destination = join(directory, "capture-metadata.jsonl");
 		restored.profile!.writeMetadata(destination);
-		expect(JSON.parse(readFileSync(destination, "utf8"))).toEqual(profile.readMetadata());
+		expect(PreparedProfile.fromFile(destination).readMetadata()).toEqual(
+			profile.readMetadata(),
+		);
 		expect(restored.profile!.captureIdentity).toBe(profile.captureIdentity);
 	} finally {
 		rmSync(directory, { recursive: true, force: true });

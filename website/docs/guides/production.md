@@ -31,7 +31,7 @@ my-app/
     <application>
 ```
 
-`artifact.json` records version, target, production status, size, and SHA-256 identity. Copy or archive the complete directory. If profiling was requested, `profile.json` is also included.
+`artifact.json` records version, target, production status, size, and SHA-256 identity. Copy or archive the complete directory. If profiling was requested, `profile.jsonl` is also included.
 
 Configuration environment reads happen at build time. Runtime arguments and environment values belong to the launched application; they do not change the captured [execution context](/api/process#execution).
 

@@ -32,8 +32,8 @@ import {
 	resolveNativeBuildContext,
 } from "../src/native-build-context.ts";
 import { buildProductCli } from "../src/product-builder.ts";
-import { parseProfileCapture, profileCaptureIdentity } from "../src/profile-artifact.ts";
-import type { ProfileMetadata, ProfileManifest } from "../src/profile-artifact.ts";
+import { parseProfileCapture, PreparedProfile } from "../src/profile-artifact.ts";
+import type { ProfileManifest } from "../src/profile-artifact.ts";
 import { ensureNativeArtifacts } from "../src/runtime-build.ts";
 import { requireToolchain, resolvePathExecutable } from "../src/toolchain.ts";
 import { requireHeapLimit } from "./heap-limit.ts";
@@ -287,21 +287,19 @@ function checkApplicationExecutablePaths(output: string): void {
 }
 
 function checkProfile(directory: string, command: "run" | "test"): void {
-	const metadata = JSON.parse(
-		readFileSync(path.join(directory, "metadata.json"), "utf-8"),
-	) as ProfileMetadata;
+	const prepared = PreparedProfile.fromFile(path.join(directory, "metadata.jsonl"));
+	const metadata = prepared.readMetadata();
 	const manifest = JSON.parse(
 		readFileSync(path.join(directory, "manifest.json"), "utf-8"),
 	) as ProfileManifest;
 	const payload = readFileSync(path.join(directory, "capture.bin"));
 	const capture = parseProfileCapture(payload);
-	const identity = profileCaptureIdentity(metadata);
+	const identity = prepared.captureIdentity;
 	if (metadata.coreOptimizationReport?.instrumentation !== "off")
 		throw new Error(`sampling profile ${command} collected optimizer instrumentation`);
 	if (
 		capture.schema < 4 ||
 		capture.captureIdentity !== identity ||
-		metadata.captureIdentity !== identity ||
 		manifest.captureIdentity !== identity ||
 		manifest.buildId !== metadata.buildId ||
 		manifest.command !== command ||

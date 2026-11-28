@@ -35,7 +35,7 @@ sampling image. It is the machine-readable choice for agents: `compiler.json`
 contains stable identities, final-backend decisions and reason codes, and exact event
 counts for every evidence-bearing source site. Its tracked, reported, and omitted
 counts make the remaining dense zero-event sites explicit; their identities and
-decisions remain in `metadata.json`. Do not use its wall time as a production
+decisions remain in `metadata.jsonl`. Do not use its wall time as a production
 performance measurement.
 
 `dev --profile` preserves one capture per generation. Successful restarts,
@@ -52,13 +52,13 @@ Add `--verbose` to `test --profile` to report compilation phases, native cache r
 and capture preparation and finalization on stderr. Test results remain on stdout.
 
 `build --profile` creates an instrumented binary and writes the matching
-`<binary>.profile.json` metadata sidecar. With `--artifact`, that sidecar is copied
-to `profile.json` and covered by `artifact.json` and `SHA256SUMS`. The turnkey
+`<binary>.profile.jsonl` metadata sidecar. With `--artifact`, that sidecar is copied
+to `profile.jsonl` and covered by `artifact.json` and `SHA256SUMS`. The turnkey
 report finalization currently belongs to `run`, `dev`, and `test`; a directly
 launched profiled binary writes its raw capture only when given a
 `MAL_PROFILE_CAPTURE` path. Turnkey commands also pass the sidecar's
 `MAL_PROFILE_IDENTITY` automatically; direct launchers that intend to finalize the
-capture must pass the `captureIdentity` from `<binary>.profile.json`. A directly
+capture must pass the `captureIdentity` from the first line of `<binary>.profile.jsonl`. A directly
 launched `--profile=compiler` binary also needs `MAL_PROFILE_COMPILER=1`; it publishes the exact census at
 `$MAL_PROFILE_CAPTURE.compiler`.
 
@@ -144,7 +144,7 @@ the same source, build config, workload, and warmed measurement protocol.
 The completeness marker, `manifest.json`, is published last. Its absence means the
 directory is partial and should not be treated as a finished report.
 Current raw captures embed a SHA-256 identity over the linked binary hash and the
-canonical complete metadata sidecar. Finalization recomputes and verifies that
+canonical complete metadata sidecar: the SHA-256 of every metadata byte after its first line. Finalization recomputes and verifies that
 identity before reading source sites, and requires the separate exact-counter file
 to carry the same identity. Legacy v1-v3 captures remain readable but are marked
 `legacy-unbound`; new captures fail closed when files from different builds are mixed.
@@ -153,7 +153,7 @@ to carry the same identity. Legacy v1-v3 captures remain readable but are marked
 | ---------------------- | -------------------------------------------------------------------- |
 | `capture.bin`          | Bounded raw evidence, bound to its build and metadata                |
 | `capture.bin.compiler` | Exact census carrying the same capture identity                      |
-| `metadata.json`        | Exact build ID, functions, source sites, and compiler remarks        |
+| `metadata.jsonl`       | Exact build ID, functions, source sites, and compiler remarks        |
 | `cpu.cpuprofile`       | Logical JS stacks for Chromium DevTools-compatible viewers           |
 | `timeline.json`        | GC and phase begin/end events in trace-event form                    |
 | `phases.json`          | Nested phase spans with inclusive, self, and maximum wall time       |
@@ -163,9 +163,19 @@ to carry the same identity. Legacy v1-v3 captures remain readable but are marked
 | `summary.json`         | Joined hot evidence, source locations, decisions, and confidence     |
 | `manifest.json`        | Capture totals, delay/drop quality, build identity, and completeness |
 
-The potentially large `metadata.json`, `compiler.json`, and `summary.json` tables use
-compact JSON to avoid spending profile time and disk space on indentation; all other
-artifacts remain human-formatted, and every JSON file is directly parseable.
+The potentially large `compiler.json` and `summary.json` tables use compact JSON to
+avoid spending profile time and disk space on indentation; all other JSON artifacts
+remain human-formatted, and every JSON file is directly parseable.
+
+`metadata.jsonl` is JSON Lines, because a self-compile census holds close to a million
+sites, more metadata than fits in one JavaScript string. The first line carries the
+`captureIdentity`; the second the build ID, entrypoint, mode, and schema. Each
+following section line names its `path` and either holds its `value` or announces
+`items` element lines. Sites and remarks use interned encodings: sites reference
+shared tables of strings and source positions (with region and inline chain), and
+remarks reference a table of distinct decision bodies. `PreparedProfile.fromFile`
+in `src/profile-artifact.ts` verifies the identity and `readMetadata()` decodes the
+complete metadata.
 
 The joined findings keep CPU and allocation confidence separate and use all CPU
 records as the percentage denominator. `manifest.json` reports attributed and

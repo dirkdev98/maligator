@@ -39,7 +39,7 @@ Compiles a native executable. Stdout contains the executable path, or the artifa
 | `--core-report`         | `phases`, `counters`, or `full` compiler diagnostics.                                                              |
 | `--verbose`             | Print build diagnostics.                                                                                           |
 
-Artifacts include the executable in `bin/`, a manifest, checksums, and license files. Profiling adds `profile.json`. See [Build for production](/guides/production).
+Artifacts include the executable in `bin/`, a manifest, checksums, and license files. Profiling adds `profile.jsonl`. See [Build for production](/guides/production).
 
 ## run {#run}
 

@@ -57,7 +57,7 @@ export interface BuildProductCliOptions {
 	production?: boolean;
 	artifactDirectory?: string;
 	/**
-	 * Instrument the CLI itself, and prepare `<binary>.profile.json` for captures of
+	 * Instrument the CLI itself, and prepare `<binary>.profile.jsonl` for captures of
 	 * its runs. Sampling records stacks; compiler mode records exact site counters.
 	 */
 	profile?: PreparedProfile["mode"];

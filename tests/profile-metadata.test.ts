@@ -1,5 +1,5 @@
 import { hash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { expect, test } from "vitest";
@@ -24,7 +24,7 @@ import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-na
 import { matchProfileSites } from "../src/compiler/target/profile-metadata.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import { validateRuntimeImageMetadata } from "../src/compiler/target/runtime-image.ts";
-import { prepareProfile, profileCaptureIdentity } from "../src/profile-artifact.ts";
+import { PreparedProfile, prepareProfile } from "../src/profile-artifact.ts";
 import {
 	canonicalProfileJson,
 	hashCanonicalProfileJson,
@@ -162,13 +162,9 @@ test("profile optimizer data enters only the explicit prepared-profile sidecar",
 			0,
 		);
 		expect(prepared.readMetadata().coreOptimizationPlan?.version.key).toMatch(/^p:/);
-		expect(
-			profileCaptureIdentity(
-				JSON.parse(readFileSync(`${binary}.profile.json`, "utf8")) as ReturnType<
-					typeof prepared.readMetadata
-				>,
-			),
-		).toBe(prepared.captureIdentity);
+		expect(PreparedProfile.fromFile(`${binary}.profile.jsonl`).captureIdentity).toBe(
+			prepared.captureIdentity,
+		);
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
@@ -186,13 +182,12 @@ test("sampling sidecars omit the raw Core plan while retaining their content ide
 			"sampling",
 			optimization(definition),
 		);
-		const written = JSON.parse(
-			readFileSync(`${binary}.profile.json`, "utf8"),
-		) as ReturnType<typeof prepared.readMetadata>;
-		expect(written.coreOptimizationPlan).toBeUndefined();
-		expect(written.coreOptimizationReport?.phases.length).toBeGreaterThan(0);
-		expect(written.sites).toEqual(definition.profiling?.sites ?? []);
-		expect(profileCaptureIdentity(written)).toBe(prepared.captureIdentity);
+		const written = PreparedProfile.fromFile(`${binary}.profile.jsonl`);
+		const metadata = written.readMetadata();
+		expect(metadata.coreOptimizationPlan).toBeUndefined();
+		expect(metadata.coreOptimizationReport?.phases.length).toBeGreaterThan(0);
+		expect(metadata.sites).toEqual(definition.profiling?.sites ?? []);
+		expect(written.captureIdentity).toBe(prepared.captureIdentity);
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
@@ -403,17 +398,6 @@ test("same-position operations retain distinct optimized instance identities", (
 	expect(new Set(sites.map((site) => site.id)).size).toBe(sites.length);
 	expect(new Set(sites.map((site) => site.instanceId)).size).toBe(sites.length);
 	expect(sites.every((site) => site.originId !== "" && site.regionId !== "")).toBe(true);
-});
-
-test("profile sites own independent mutable inline chains", () => {
-	const definition = compile(
-		`function hot(object) { object.left = {}; object.right = {}; return object; } hot(globalThis);`,
-	);
-	const sites = definition.profiling!.sites;
-	expect(sites.length).toBeGreaterThan(1);
-	expect(new Set(sites.map((site) => site.inlineChain)).size).toBe(sites.length);
-	const links = sites.flatMap((site) => site.inlineChain);
-	expect(new Set(links).size).toBe(links.length);
 });
 
 test("every residual allocation, call, property, and boxing site has a remark", () => {

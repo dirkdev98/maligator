@@ -14,7 +14,7 @@ function makeMetadata(): ProfileMetadata {
 		identity: { status: "unknown", reason: "no-source-origin" } as const,
 	}));
 	const profile: ProfileMetadata = {
-		schema: 8,
+		schema: 9,
 		mode: "sampling",
 		buildId: "b".repeat(64),
 		entrypoint: "fictional.mjs",
@@ -35,12 +35,12 @@ export function produce(_context: unknown, directory: string) {
 	const metadata = makeMetadata();
 	const profile = PreparedProfile.fromMetadata(metadata);
 	const binaryPath = join(directory, "application");
-	profile.writeMetadata(`${binaryPath}.profile.json`);
+	profile.writeMetadata(`${binaryPath}.profile.jsonl`);
 	const value = publishCompilerResult(
 		{ binaryPath, profile },
 		join(directory, "handoff"),
 	);
-	writeFileSync(`${binaryPath}.profile.json`, "{}");
+	writeFileSync(`${binaryPath}.profile.jsonl`, "{}");
 	return {
 		value,
 		count: metadata.functions.length,

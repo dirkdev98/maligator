@@ -4,6 +4,12 @@ import type { CompilerSiteFacts, FactDependency } from "../shared/compiler-facts
 import type { ProgramImage } from "./program-image.ts";
 import type { BytecodeInstruction } from "./runtime-image.ts";
 
+/** One frame of an inline caller chain, innermost first. */
+export interface ProfileInlineFrame {
+	readonly functionIndex: number;
+	readonly positionId: number;
+}
+
 export interface ProfileSite {
 	id: number;
 	/** Deliberately non-unique across structurally identical sites: consumers must
@@ -22,7 +28,8 @@ export interface ProfileSite {
 	line: number;
 	column: number;
 	operation: string;
-	inlineChain: Array<{ functionIndex: number; positionId: number }>;
+	/** Innermost first; sites at the same source position may share one chain. */
+	inlineChain: ReadonlyArray<ProfileInlineFrame>;
 }
 
 export interface CompilerRemark {
@@ -586,16 +593,18 @@ export function buildProfileMetadata(
 			const leafFunctionIndex = position.inlinedFunctionIndex ?? functionIndex;
 			const leafFile = functionFile(leafFunctionIndex);
 			const anchor = anchorDigest(leafFile, position.line);
-			const inlineChain: ProfileSite["inlineChain"] = [];
+			const inlineChain: Array<ProfileInlineFrame> = [];
 			let chainPositionId = positionId;
 			let guard = 0;
 			while (chainPositionId >= 0 && guard++ < 1024) {
 				const chainPosition = runtime.sourcePositions[chainPositionId];
 				if (chainPosition === undefined) break;
-				inlineChain.push({
-					functionIndex: chainPosition.inlinedFunctionIndex ?? functionIndex,
-					positionId: chainPositionId,
-				});
+				inlineChain.push(
+					Object.freeze({
+						functionIndex: chainPosition.inlinedFunctionIndex ?? functionIndex,
+						positionId: chainPositionId,
+					}),
+				);
 				chainPositionId = chainPosition.callerPosId ?? -1;
 			}
 			const chainKey = inlineChain
@@ -613,7 +622,7 @@ export function buildProfileMetadata(
 				regionId: logicalId(
 					`${relativeFile(physicalFile)}\u0000${functionName(functionIndex)}\u0000${chainKey}`,
 				),
-				inlineChain,
+				inlineChain: Object.freeze(inlineChain),
 			};
 			positions.set(positionId, identity);
 		}
@@ -679,7 +688,7 @@ export function buildProfileMetadata(
 							line: position.line,
 							column: position.column,
 							operation,
-							inlineChain: identity.inlineChain.map((entry) => ({ ...entry })),
+							inlineChain: identity.inlineChain,
 						});
 					}
 					runtimeSites?.set(coordinate, siteId);
