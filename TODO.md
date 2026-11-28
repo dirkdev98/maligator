@@ -451,10 +451,11 @@ distinct when measuring text work.
       only keys interned pattern strings, so `new RegExp(source)` with a computed
       `source` recompiles on every call, even when the same text repeats.
 
-- [ ] Shorten the C entry of `RegExp.prototype.exec`. With anchored route patterns
-      rejected on their prefix, a route miss costs about 250 instructions against
-      Node's 86, most of it in the C exec entry: the `lastIndex` read, string
-      flattening and the engine call.
+- [ ] Shorten the RegExp exec hit path. A route miss now costs about 116 instructions
+      against Node's 86, but an exec hit still costs about 850 more than Node per
+      call: the regress tree walk (about 500), the result Array (about 280), the
+      legacy statics on every match including `test()` (about 130) and the
+      substrings (about 250).
 
 - [ ] Reuse one-unit strings above 0xFF. `mal_intrinsic_code_unit` caches units up to
       0xFF only, so `str[i]`, `charAt`, `for...of` and the String iterator allocate a

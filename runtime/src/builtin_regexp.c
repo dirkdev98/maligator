@@ -811,22 +811,25 @@ static bool regexp_get_last_index_slow(MalVm *vm, MalValue r, i64 *out) {
     return true;
 }
 
-// Every exec reads and writes lastIndex; the exact layout holding a small
-// integer, which a match end always leaves, needs no conversion.
+// Every exec reads and writes lastIndex. The exact layout keeps it in a plain
+// writable slot, and a small integer there, which a match end always leaves,
+// needs no conversion: reading and writing it runs no code.
+static inline __attribute__((always_inline)) bool regexp_plain_last_index(
+    MalVm *vm, MalValue r, i64 *out
+) {
+    if (!mal_value_is_regexp_object(r)) return false;
+    const MalObject *object = (const MalObject *) mal_value_to_regexp_object(r);
+    if (object->shape != vm->regexp_instance_shape) return false;
+    MalValue value = mal_object_field_load_shaped(object, 0);
+    if (!mal_value_is_int32(value) || mal_value_to_i32(value) < 0) return false;
+    *out = mal_value_to_i32(value);
+    return true;
+}
+
 static inline __attribute__((always_inline)) bool regexp_get_last_index(
     MalVm *vm, MalValue r, i64 *out
 ) {
-    if (mal_value_is_regexp_object(r)) {
-        const MalObject *object = (const MalObject *) mal_value_to_regexp_object(r);
-        if (object->shape == vm->regexp_instance_shape) {
-            MalValue value = mal_object_field_load_shaped(object, 0);
-            if (mal_value_is_int32(value) && mal_value_to_i32(value) >= 0) {
-                *out = mal_value_to_i32(value);
-                return true;
-            }
-        }
-    }
-    return regexp_get_last_index_slow(vm, r, out);
+    return regexp_plain_last_index(vm, r, out) || regexp_get_last_index_slow(vm, r, out);
 }
 
 static bool regexp_set_last_index_slow(MalVm *vm, MalValue r, i64 value) {
@@ -1144,55 +1147,16 @@ static int regexp_match_only(
     return 1;
 }
 
-// RegExpBuiltinExec(R, S): the matcher-backed exec. Returns the result array, or
-// null on no match, or undefined with a pending throw on error. The closed
-// consumers used by test() and canonical @@search do not materialize that array:
-// MATCH_ONLY returns true, INDEX_ONLY returns the match-start number, and OFFSETS
-// appends every capture pair and returns true. In each case lastIndex and
-// matcher state still follow the ordinary algorithm.
-static MalValue regexp_builtin_exec(
-    MalVm *vm, MalRegExpObject *re, MalValue r_value, MalString *s,
-    RegexpBuiltinExecResult result_kind, bool last_index_known_zero,
-    RegexpCaptureProjection *projection
+// Shapes RegExpBuiltinExec's result for a match whose lastIndex effects are done.
+// `match_caps` holds the first 32 capture pairs; a wider match reads all of them
+// from the matcher's retained copy.
+static inline __attribute__((always_inline)) MalValue regexp_builtin_exec_result(
+    MalVm *vm, MalRegExpObject *re, MalString *s, RegexpBuiltinExecResult result_kind,
+    const int32_t *match_caps, int32_t ngroups, RegexpCaptureProjection *projection
 ) {
-    usize length = mal_string_length(s);
-
-    i64 last_index = 0;
-    if (!last_index_known_zero &&
-        !regexp_get_last_index(vm, r_value, &last_index)) {
-        return mal_value_new_undefined();
-    }
-
-    bool global = (re->flag_bits & MAL_REGEXP_JS_GLOBAL) != 0;
-    bool sticky = (re->flag_bits & MAL_REGEXP_JS_STICKY) != 0;
     bool has_indices = (re->flag_bits & MAL_REGEXP_JS_HAS_INDICES) != 0;
-    if (!global && !sticky) {
-        last_index = 0;
-    }
-
-    if (last_index > (i64) length) {
-        if (global || sticky) {
-            if (!regexp_set_last_index(vm, r_value, 0)) {
-                return mal_value_new_undefined();
-            }
-        }
-        return mal_value_new_null();
-    }
-
-    int32_t stack_caps[64];
-    int32_t *caps = stack_caps;
-    int32_t ngroups = regexp_matcher_exec(vm, re->matcher, s, (usize) last_index, caps, 64);
-    if (ngroups < 0) return mal_value_new_undefined();
-    if (ngroups == 0) {
-        if (global || sticky) {
-            if (!regexp_set_last_index(vm, r_value, 0)) {
-                return mal_value_new_undefined();
-            }
-        }
-        return mal_value_new_null();
-    }
-
-    bool heap_caps = false;
+    const int32_t *caps = match_caps;
+    int32_t *heap_caps = nullptr;
     if (ngroups > 32) {
         usize capture_count;
         usize capture_bytes;
@@ -1201,61 +1165,35 @@ static MalValue regexp_builtin_exec(
             regexp_throw_string_length(vm);
             return mal_value_new_undefined();
         }
-        caps = malloc(capture_bytes);
-        if (caps == nullptr) {
+        heap_caps = malloc(capture_bytes);
+        if (heap_caps == nullptr) {
             regexp_throw_string_length(vm);
             return mal_value_new_undefined();
         }
         mal_profile_native_allocation(
             &vm->heap, capture_bytes, MAL_PROFILE_ALLOCATION_FAMILY_REGEXP);
-        mal_regexp_require_engine()->copy_captures(re->matcher, caps, (int32_t) capture_count);
-        heap_caps = true;
+        mal_regexp_require_engine()->copy_captures(re->matcher, heap_caps, (int32_t) capture_count);
+        caps = heap_caps;
     }
 
     int32_t match_start = caps[0];
     int32_t match_end = caps[1];
 
-    // Sticky requires the match to begin exactly at lastIndex.
-    if (sticky && match_start != (i32) last_index) {
-        if (heap_caps) {
-            free(caps);
-        }
-        if (!regexp_set_last_index(vm, r_value, 0)) {
-            return mal_value_new_undefined();
-        }
-        return mal_value_new_null();
-    }
-
-    if (global || sticky) {
-        if (!regexp_set_last_index(vm, r_value, match_end)) {
-            if (heap_caps) {
-                free(caps);
-            }
-            return mal_value_new_undefined();
-        }
-    }
-
     regexp_legacy_update(vm, s, caps, ngroups);
 
     if (result_kind == REGEXP_BUILTIN_EXEC_MATCH_ONLY) {
-        if (heap_caps) {
-            free(caps);
-        }
+        if (heap_caps != nullptr) free(heap_caps);
         return mal_value_new_boolean(true);
     }
 
     if (result_kind == REGEXP_BUILTIN_EXEC_INDEX_ONLY) {
-        if (heap_caps) {
-            free(caps);
-        }
+        if (heap_caps != nullptr) free(heap_caps);
         return mal_value_from_f64((f64) match_start);
     }
 
     if (result_kind == REGEXP_BUILTIN_EXEC_OFFSETS) {
         bool stored = regexp_match_offsets_append(projection->offsets, caps, ngroups);
-        if (heap_caps) {
-            free(caps);
-        }
+        if (heap_caps != nullptr) free(heap_caps);
         if (!stored) {
             regexp_throw_string_length(vm);
             return mal_value_new_undefined();
@@ -1282,7 +1220,7 @@ static MalValue regexp_builtin_exec(
                     // Coercions may replace the matcher and invalidate its old layout.
                     layout = regexp_group_layout(vm, re);
                     if (layout == nullptr) {
-                        if (heap_caps) free(caps);
+                        if (heap_caps != nullptr) free(heap_caps);
                         return mal_value_new_undefined();
                     }
                 }
@@ -1330,9 +1268,7 @@ static MalValue regexp_builtin_exec(
                 }
                 projection->values[i] = value;
             }
-            if (heap_caps) {
-                free(caps);
-            }
+            if (heap_caps != nullptr) free(heap_caps);
             return mal_value_new_boolean(true);
         }
         // The ordinary result Array does not own an out-of-range index, so a
@@ -1343,7 +1279,7 @@ static MalValue regexp_builtin_exec(
 
     MalRegExpGroupLayout *layout = regexp_group_layout(vm, re);
     if (layout == nullptr) {
-        if (heap_caps) free(caps);
+        if (heap_caps != nullptr) free(heap_caps);
         return mal_value_new_undefined();
     }
     MalValue named_values[4] = {
@@ -1384,10 +1320,71 @@ static MalValue regexp_builtin_exec(
         mal_object_field_store_shaped((MalObject *) array, 3, indices);
     }
 
-    if (heap_caps) {
-        free(caps);
-    }
+    if (heap_caps != nullptr) free(heap_caps);
     return mal_value_from_object((MalObject *) array);
+}
+
+// RegExpBuiltinExec(R, S) from its flags on, for the lastIndex its caller read and
+// converted. That conversion can run code that recompiles R, so the flags and
+// matcher are read only here. Returns the result array, or null on no match, or
+// undefined with a pending throw on error. The closed consumers used by test() and
+// canonical @@search do not materialize that array: MATCH_ONLY returns true,
+// INDEX_ONLY returns the match-start number, and OFFSETS appends every capture
+// pair and returns true. In each case lastIndex and matcher state still follow the
+// ordinary algorithm.
+static __attribute__((noinline)) MalValue regexp_builtin_exec_at(
+    MalVm *vm, MalRegExpObject *re, MalValue r_value, MalString *s,
+    RegexpBuiltinExecResult result_kind, i64 last_index, RegexpCaptureProjection *projection
+) {
+    bool global = (re->flag_bits & MAL_REGEXP_JS_GLOBAL) != 0;
+    bool sticky = (re->flag_bits & MAL_REGEXP_JS_STICKY) != 0;
+    if (!global && !sticky) {
+        last_index = 0;
+    }
+
+    if (last_index > (i64) mal_string_length(s)) {
+        if (global || sticky) {
+            if (!regexp_set_last_index(vm, r_value, 0)) {
+                return mal_value_new_undefined();
+            }
+        }
+        return mal_value_new_null();
+    }
+
+    // The matcher always writes the match range, so the first pair is valid however
+    // many groups the match has.
+    int32_t caps[64];
+    int32_t ngroups = regexp_matcher_exec(vm, re->matcher, s, (usize) last_index, caps, 64);
+    if (ngroups < 0) return mal_value_new_undefined();
+    // Sticky requires the match to begin exactly at lastIndex.
+    if (ngroups == 0 || (sticky && caps[0] != (i32) last_index)) {
+        if (global || sticky) {
+            if (!regexp_set_last_index(vm, r_value, 0)) {
+                return mal_value_new_undefined();
+            }
+        }
+        return mal_value_new_null();
+    }
+    if (global || sticky) {
+        if (!regexp_set_last_index(vm, r_value, caps[1])) {
+            return mal_value_new_undefined();
+        }
+    }
+    return regexp_builtin_exec_result(vm, re, s, result_kind, caps, ngroups, projection);
+}
+
+// RegExpBuiltinExec(R, S), reading lastIndex first unless the caller knows it is 0.
+static MalValue regexp_builtin_exec(
+    MalVm *vm, MalRegExpObject *re, MalValue r_value, MalString *s,
+    RegexpBuiltinExecResult result_kind, bool last_index_known_zero,
+    RegexpCaptureProjection *projection
+) {
+    i64 last_index = 0;
+    if (!last_index_known_zero &&
+        !regexp_get_last_index(vm, r_value, &last_index)) {
+        return mal_value_new_undefined();
+    }
+    return regexp_builtin_exec_at(vm, re, r_value, s, result_kind, last_index, projection);
 }
 
 // RegExpExec(R, S): use a user-defined `exec` if callable; else RegExpBuiltinExec.
@@ -1686,17 +1683,12 @@ static bool regexp_is_own_builtin(
         ;
 }
 
-MalValue mal_regexp_exec_call(
-    MalVm *vm, MalValue callee, MalValue receiver, const MalValue *args, i32 arg_count
+// RegExp.prototype.exec's own algorithm when its ToString or lastIndex conversion
+// can run code: the receiver and subject stay rooted and the frame counts as
+// native, as for any builtin call.
+static __attribute__((noinline)) MalValue regexp_exec_call_rooted(
+    MalVm *vm, MalValue callee, MalValue receiver, MalValue argument
 ) {
-    if (!regexp_is_own_builtin(vm, callee, regexp_proto_exec) ||
-        !mal_value_is_regexp_object(receiver)) {
-        MAL_PROFILE_SITE_EVENT(vm, vm->profile_current_site_id, MAL_PROFILE_SITE_FALLBACK, 1);
-        return mal_vm_call_cached_value(vm, callee, receiver, args, arg_count);
-    }
-    // From here on this is RegExp.prototype.exec's own algorithm: ToString of the
-    // argument, then RegExpBuiltinExec with its lastIndex reads and writes.
-    MalValue argument = arg_count > 0 ? args[0] : mal_value_new_undefined();
     MalCalleeRoots roots;
     mal_gc_callee_roots_begin(&roots, receiver, mal_value_new_undefined(), callee, &argument, 1);
     vm->gc_native_frames++;
@@ -1711,6 +1703,29 @@ MalValue mal_regexp_exec_call(
     vm->gc_native_frames--;
     mal_gc_callee_roots_end(&roots);
     return result;
+}
+
+MalValue mal_regexp_exec_call(
+    MalVm *vm, MalValue callee, MalValue receiver, const MalValue *args, i32 arg_count
+) {
+    if (!regexp_is_own_builtin(vm, callee, regexp_proto_exec) ||
+        !mal_value_is_regexp_object(receiver)) {
+        MAL_PROFILE_SITE_EVENT(vm, vm->profile_current_site_id, MAL_PROFILE_SITE_FALLBACK, 1);
+        return mal_vm_call_cached_value(vm, callee, receiver, args, arg_count);
+    }
+    // From here on this is RegExp.prototype.exec's own algorithm: ToString of the
+    // argument, then RegExpBuiltinExec with its lastIndex reads and writes.
+    MalValue argument = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    // A string needs no conversion and a plain lastIndex none either, so this exec
+    // runs no JavaScript. Allocation never collects, only a safepoint does, so
+    // without one neither the receiver nor the subject needs a root.
+    i64 last_index;
+    if (mal_value_is_string(argument) && regexp_plain_last_index(vm, receiver, &last_index)) {
+        return regexp_builtin_exec_at(
+            vm, mal_value_to_regexp_object(receiver), receiver, mal_value_to_string(argument),
+            REGEXP_BUILTIN_EXEC_RESULT, last_index, nullptr);
+    }
+    return regexp_exec_call_rooted(vm, callee, receiver, argument);
 }
 
 static MalValue regexp_proto_test(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -3904,6 +3919,36 @@ void mal_builtin_regexp_install(MalVm *vm) {
     regexp_define_getter(vm, prototype, (const byte *) "hasIndices", (const byte *) "get hasIndices", regexp_proto_get_has_indices);
 }
 
+// The capture projection when ToString or the lastIndex conversion can run code.
+// This is a compiled-frame helper rather than a native callback: the caller
+// already publishes a complete GC frame. The receiver, callee and subject stay
+// rooted, and the native frame count suppresses collection while the exec
+// builder holds an in-progress result only in C locals; the explicit span
+// additionally documents the emitter-only capture roots. Only a locked identity
+// reaches here with a subject that still needs ToString.
+static __attribute__((noinline)) MalValue regexp_exec_capture_projection_rooted(
+    MalVm *vm, MalValue callee, MalValue regexp, MalRegExpObject *canonical,
+    MalValue *subject, RegexpCaptureProjection *projection
+) {
+    MalCalleeRoots call_roots;
+    mal_gc_callee_roots_begin(&call_roots, regexp, mal_value_new_undefined(), callee, subject, 1);
+    MalValue result = mal_value_new_undefined();
+    MalString *subject_string;
+    if (mal_vm_to_string(vm, *subject, &subject_string)) {
+        *subject = mal_value_from_string(subject_string);
+        MalRootSpan root_span;
+        mal_gc_root(&root_span, projection->values, projection->count);
+        vm->gc_native_frames++;
+        result = regexp_builtin_exec(
+            vm, canonical, regexp, subject_string,
+            REGEXP_BUILTIN_EXEC_CAPTURE_PROJECTION, false, projection);
+        vm->gc_native_frames--;
+        mal_gc_unroot(&root_span);
+    }
+    mal_gc_callee_roots_end(&call_roots);
+    return result;
+}
+
 static bool regexp_exec_capture_projection_impl(
     MalVm *vm,
     bool locked_identity,
@@ -3952,34 +3997,13 @@ static bool regexp_exec_capture_projection_impl(
         goto guard_miss;
     }
 
-    MalValue args[1] = {string};
-    MalCalleeRoots call_roots;
-    mal_gc_callee_roots_begin(
-        &call_roots, regexp, mal_value_new_undefined(), callee, args, 1);
-    MalString *subject;
-    if (mal_value_is_string(args[0])) {
-        subject = mal_value_to_string(args[0]);
-    } else if (!locked_identity || !mal_vm_to_string(vm, args[0], &subject)) {
-        for (u32 i = 0; i < capture_count; i++) {
-            *capture_outputs[i] = mal_value_new_undefined();
-        }
-        *subject_output = mal_value_new_undefined();
-        *result_out = mal_value_new_undefined();
-        mal_gc_callee_roots_end(&call_roots);
-        return locked_identity;
-    } else {
-        args[0] = mal_value_from_string(subject);
-    }
-    MalValue roots[8];
+    MalValue values[8];
     for (u32 i = 0; i < capture_count; i++) {
-        roots[i] = mal_value_new_undefined();
+        values[i] = mal_value_new_undefined();
     }
-    MalRootSpan root_span;
-    mal_gc_root(&root_span, roots, capture_count);
-
     RegexpCaptureProjection projection = {
         .requests = requests,
-        .values = roots,
+        .values = values,
         .count = capture_count,
         .span_mask = capture_span_mask,
         .starts = capture_starts,
@@ -3987,32 +4011,27 @@ static bool regexp_exec_capture_projection_impl(
         .match_start = nullptr,
         .match_end = nullptr,
     };
-    // This is a compiled-frame helper rather than a native callback: the
-    // caller already publishes a complete GC frame. Suppress collection while
-    // the ordinary exec builder may hold an in-progress result only in C locals;
-    // the explicit span additionally documents the emitter-only capture roots.
-    vm->gc_native_frames++;
-    MalValue result = regexp_builtin_exec(
-        vm, canonical, regexp, subject,
-        REGEXP_BUILTIN_EXEC_CAPTURE_PROJECTION, false, &projection);
-    vm->gc_native_frames--;
-    if (!regexp_threw(vm)) {
-        for (u32 i = 0; i < capture_count; i++) {
-            *capture_outputs[i] = roots[i];
-        }
-        *result_out = result;
-        *subject_output = mal_value_is_boolean(result)
-            ? args[0]
-            : mal_value_new_undefined();
+    MalValue subject = string;
+    MalValue result;
+    i64 last_index;
+    // As in the exec call form, a string subject and a plain lastIndex run no
+    // JavaScript, so nothing collects while the projected values sit in C locals.
+    if (mal_value_is_string(string) && regexp_plain_last_index(vm, regexp, &last_index)) {
+        result = regexp_builtin_exec_at(
+            vm, canonical, regexp, mal_value_to_string(string),
+            REGEXP_BUILTIN_EXEC_CAPTURE_PROJECTION, last_index, &projection);
     } else {
-        for (u32 i = 0; i < capture_count; i++) {
-            *capture_outputs[i] = mal_value_new_undefined();
-        }
-        *subject_output = mal_value_new_undefined();
+        result = regexp_exec_capture_projection_rooted(
+            vm, callee, regexp, canonical, &subject, &projection);
     }
-
-    mal_gc_unroot(&root_span);
-    mal_gc_callee_roots_end(&call_roots);
+    bool threw = regexp_threw(vm);
+    for (u32 i = 0; i < capture_count; i++) {
+        *capture_outputs[i] = threw ? mal_value_new_undefined() : values[i];
+    }
+    *result_out = threw ? mal_value_new_undefined() : result;
+    *subject_output = !threw && mal_value_is_boolean(result)
+        ? subject
+        : mal_value_new_undefined();
     return true;
 
 guard_miss:
@@ -4195,33 +4214,42 @@ MalValue mal_regexp_exec_result_projection(
     MalValue args[1] = {string};
     // The captured exec only observes the RegExp brand and lastIndex; unrelated
     // prototype mutations do not change its authority or matching algorithm.
-    if (mal_value_is_native_function_object(callee) &&
-        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) == regexp_proto_exec &&
-        mal_value_is_regexp_object(regexp)
+    if (!mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != regexp_proto_exec ||
+        !mal_value_is_regexp_object(regexp)
 #if MAL_REALMS
-        && mal_vm_callee_realm(vm, callee) == vm->current_realm
+        || mal_vm_callee_realm(vm, callee) != vm->current_realm
 #endif
     ) {
+        return mal_vm_call_cached_value(vm, callee, regexp, args, 1);
+    }
+    MalValue result = mal_value_new_undefined();
+    i64 last_index;
+    // As in the exec call form, a string subject and a plain lastIndex run no
+    // JavaScript, so nothing needs a root.
+    if (mal_value_is_string(string) && regexp_plain_last_index(vm, regexp, &last_index)) {
+        result = regexp_builtin_exec_at(
+            vm, mal_value_to_regexp_object(regexp), regexp, mal_value_to_string(string),
+            REGEXP_BUILTIN_EXEC_MATCH_ONLY, last_index, nullptr);
+    } else {
         MalCalleeRoots roots;
         mal_gc_callee_roots_begin(
             &roots, regexp, mal_value_new_undefined(), callee, args, 1);
         vm->gc_native_frames++;
-        MalValue result = mal_value_new_undefined();
         MalString *subject;
         if (mal_vm_to_string(vm, args[0], &subject)) {
             args[0] = mal_value_from_string(subject);
             result = regexp_builtin_exec(
                 vm, mal_value_to_regexp_object(regexp), regexp, subject,
                 REGEXP_BUILTIN_EXEC_MATCH_ONLY, false, nullptr);
-            if (!regexp_threw(vm) && mal_value_is_boolean(result)) {
-                MAL_PERF_COUNT(regexp_exec_result_elisions);
-            }
         }
         vm->gc_native_frames--;
         mal_gc_callee_roots_end(&roots);
-        return result;
     }
-    return mal_vm_call_cached_value(vm, callee, regexp, args, 1);
+    if (!regexp_threw(vm) && mal_value_is_boolean(result)) {
+        MAL_PERF_COUNT(regexp_exec_result_elisions);
+    }
+    return result;
 }
 
 #include "generated/known_native_builtin_regexp_c.inc"

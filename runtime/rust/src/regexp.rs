@@ -591,9 +591,19 @@ impl FastPattern {
         slots: &mut [i32; FAST_CAPTURE_SLOTS],
         at_start_only: bool,
     ) -> bool {
-        if self.rejects_single_position(subject, start, at_start_only) {
-            return false;
-        }
+        !self.rejects_single_position(subject, start, at_start_only)
+            && self.find_admitted(subject, start, slots, at_start_only)
+    }
+
+    /// `find` for a search `rejects_single_position` has admitted. An anchored plan
+    /// starts past the prefix units, so it must never run without that test.
+    fn find_admitted<U: SubjectUnit>(
+        &self,
+        subject: &[U],
+        start: usize,
+        slots: &mut [i32; FAST_CAPTURE_SLOTS],
+        at_start_only: bool,
+    ) -> bool {
         if let (FastProgram::Tree(nodes), 0) = (&self.program, self.plan_offset) {
             if let [FastNode::EndOrClass(class)] = nodes.as_ref() {
                 let mut position = start;
@@ -1825,7 +1835,28 @@ unsafe fn copy_cached_captures(
     groups
 }
 
-/// Runs the allocation-free plan, which writes its captures straight into the retained slots.
+/// Answers a search that `^` or stickiness confines to one position when it fails
+/// on the plan's prefix. Such misses are most of a router's execs, so the exec
+/// entries test this before the plan's frame and slot preparation.
+#[inline(always)]
+fn fast_rejects_one_position<U: SubjectUnit>(
+    cp: &mut CompiledPattern,
+    subject: &[U],
+    start: usize,
+) -> bool {
+    let fast = cp.fast.as_ref().expect("fast plan exists");
+    if !fast.rejects_single_position(subject, start, cp.sticky) {
+        return false;
+    }
+    // Only the general executor sets `last`, and a pattern with a fast plan never
+    // reaches it. Not assigning it keeps its drop, and so a frame, off this path.
+    debug_assert!(cp.last.is_none());
+    cp.fast_last_groups = 0;
+    true
+}
+
+/// Runs the allocation-free plan, which writes its captures straight into the
+/// retained slots, for a search `fast_rejects_one_position` has admitted.
 fn fast_exec<U: SubjectUnit>(
     cp: &mut CompiledPattern,
     subject: &[U],
@@ -1835,7 +1866,7 @@ fn fast_exec<U: SubjectUnit>(
 ) -> i32 {
     cp.last = None;
     let fast = cp.fast.as_ref().expect("fast plan exists");
-    if !fast.find(subject, start, &mut cp.fast_last_captures, cp.sticky) {
+    if !fast.find_admitted(subject, start, &mut cp.fast_last_captures, cp.sticky) {
         cp.fast_last_groups = 0;
         return 0;
     }
@@ -1929,6 +1960,20 @@ fn remember_fast_miss(cp: &mut CompiledPattern, subject: &[u8], start: usize) {
         .record(subject, 0, start, &None);
 }
 
+// The exec entries reach the plan through out-of-line calls, so one that rejects
+// needs no frame.
+#[inline(never)]
+fn fast_exec_utf16(
+    cp: &mut CompiledPattern,
+    subject: &[u16],
+    start: usize,
+    caps_out: *mut i32,
+    caps_cap: i32,
+) -> i32 {
+    fast_exec(cp, subject, start, caps_out, caps_cap)
+}
+
+#[inline(never)]
 fn fast_exec_latin1(
     cp: &mut CompiledPattern,
     subject: &[u8],
@@ -2089,7 +2134,10 @@ pub unsafe extern "C" fn mal_regexp_exec(
                 unsafe { *execution_flags_out = EXEC_FAST };
             }
             let subj = unsafe { nullable_u16_slice(subject, subject_len) };
-            return fast_exec(cp, subj, start, caps_out, caps_cap);
+            if fast_rejects_one_position(cp, subj, start) {
+                return 0;
+            }
+            return fast_exec_utf16(cp, subj, start, caps_out, caps_cap);
         }
     }
     unsafe {
@@ -2137,13 +2185,6 @@ unsafe fn exec_general(
     // regress receives the original code units so non-Unicode mode can match
     // lone surrogates and Unicode mode can apply its own pair handling.
     let subj = unsafe { nullable_u16_slice(subject, subject_len) };
-
-    if cp.fast.is_some() {
-        if !execution_flags_out.is_null() {
-            unsafe { *execution_flags_out = EXEC_FAST };
-        }
-        return fast_exec(cp, subj, start, caps_out, caps_cap);
-    }
 
     let previous = cp.last.take();
     let mut execution_flags = 0;
@@ -2258,7 +2299,7 @@ pub unsafe extern "C" fn mal_regexp_exec_latin1(
     caps_cap: i32,
     execution_flags_out: *mut u32,
 ) -> i32 {
-    // Successful fast matches avoid the general executor's frame.
+    // Allocation-free plans answer before the general path's frame and caches.
     if !handle.is_null() {
         let cp = unsafe { &mut *(handle as *mut CompiledPattern) };
         if cp.fast.is_some() && start <= subject_len {
@@ -2266,6 +2307,9 @@ pub unsafe extern "C" fn mal_regexp_exec_latin1(
                 unsafe { *execution_flags_out = EXEC_FAST | EXEC_LATIN1 };
             }
             let subj = unsafe { nullable_slice(subject, subject_len) };
+            if fast_rejects_one_position(cp, subj, start) {
+                return 0;
+            }
             return fast_exec_latin1(cp, subj, start, caps_out, caps_cap);
         }
     }
@@ -2312,13 +2356,6 @@ unsafe fn exec_latin1_general(
         return 0;
     }
     let subj = unsafe { nullable_slice(subject, subject_len) };
-
-    if cp.fast.is_some() {
-        if !execution_flags_out.is_null() {
-            unsafe { *execution_flags_out = EXEC_FAST | EXEC_LATIN1 };
-        }
-        return fast_exec_latin1(cp, subj, start, caps_out, caps_cap);
-    }
 
     let memoized = subject_len <= RESULT_MEMO_SUBJECT_BYTES;
     if memoized {
